@@ -1,9 +1,14 @@
 use anyhow::Result;
-use std::io::{self, Write};
-use std::process;
+use std::{
+    env,
+    io::{self, Write},
+    path::Path,
+    process,
+};
+
+const BUILTINS: [&str; 3] = ["echo", "exit", "type"];
 
 fn main() -> Result<()> {
-    let builtin_cmds: Vec<&str> = vec!["echo", "exit", "type"];
     loop {
         print!("$ ");
         io::stdout().flush()?;
@@ -22,14 +27,27 @@ fn main() -> Result<()> {
             Some(&"echo") => println!("{}", args[1..].join(" ")),
             Some(&"type") => {
                 assert_eq!(args.len(), 2);
-                if builtin_cmds.contains(&args[1]) {
-                    println!("{} is a shell builtin", args[1]);
-                } else {
-                    println!("{} not found", args[1]);
-                }
+                handle_type(args[1]);
             }
             Some(command) => println!("{}: command not found", command),
             None => continue,
         }
+    }
+}
+
+fn handle_type(cmd: &str) {
+    if BUILTINS.contains(&cmd) {
+        println!("{} is a shell builtin", cmd);
+    } else {
+        let path = env::var("PATH").unwrap();
+        let paths: Vec<&str> = path.split(':').collect();
+        for path in paths {
+            let full_path = Path::new(path).join(cmd);
+            if full_path.exists() {
+                println!("{} is {}", cmd, full_path.display());
+                return;
+            }
+        }
+        println!("{}: not found", cmd);
     }
 }
