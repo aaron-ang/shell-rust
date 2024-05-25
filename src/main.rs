@@ -7,22 +7,20 @@ fn main() -> Result<()> {
         print!("$ ");
         io::stdout().flush()?;
 
-        // Wait for user input
-        let stdin = io::stdin();
         let mut input = String::new();
-        stdin.read_line(&mut input)?;
+        io::stdin().read_line(&mut input)?;
 
-        input = input.trim().into();
-        let tokens = tokenize(&input);
-        match tokens[..] {
-            ["exit", status] => process::exit(status.parse::<i32>()?),
-            _ => {
-                println!("{}: command not found", tokens[0]);
+        let input = input.trim();
+        let args: Vec<&str> = input.split_whitespace().collect();
+
+        match args.get(0) {
+            Some(&"exit") => {
+                assert_eq!(args.len(), 2);
+                process::exit(args[1].parse::<i32>()?);
             }
+            Some(&"echo") => println!("{}", args[1..].join(" ")),
+            Some(command) => println!("{}: command not found", command),
+            None => continue,
         }
     }
-}
-
-fn tokenize(input: &String) -> Vec<&str> {
-    input.split_whitespace().collect()
 }
