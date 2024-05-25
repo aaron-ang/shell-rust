@@ -1,21 +1,28 @@
-#[allow(unused_imports)]
+use anyhow::Result;
 use std::io::{self, Write};
+use std::process;
 
-fn main() {
+fn main() -> Result<()> {
     loop {
         print!("$ ");
-        io::stdout().flush().unwrap();
+        io::stdout().flush()?;
 
         // Wait for user input
         let stdin = io::stdin();
         let mut input = String::new();
-        stdin.read_line(&mut input).unwrap();
+        stdin.read_line(&mut input)?;
 
         input = input.trim().into();
-        match input {
+        let tokens = tokenize(&input);
+        match tokens[..] {
+            ["exit", status] => process::exit(status.parse::<i32>()?),
             _ => {
-                println!("{input}: command not found");
+                println!("{}: command not found", tokens[0]);
             }
         }
     }
+}
+
+fn tokenize(input: &String) -> Vec<&str> {
+    input.split_whitespace().collect()
 }
