@@ -21,17 +21,27 @@ fn main() -> Result<()> {
 
         if let Some(command) = args.get(0) {
             match *command {
-                "exit" => process::exit(args[1].parse::<i32>()?),
+                "exit" => handle_exit(args),
                 "echo" => println!("{}", args[1..].join(" ")),
-                "type" => handle_type(args[1], builtins.clone()),
+                "type" => handle_type(args, builtins.clone()),
                 "pwd" => println!("{}", env::current_dir()?.display()),
+                "cd" => handle_cd(args),
                 cmd => handle_executable_or_unknown(cmd, &args[1..]),
             }
         }
     }
 }
 
-fn handle_type(cmd: &str, builtins: Vec<&str>) {
+fn handle_exit(args: Vec<&str>) -> ! {
+    process::exit(
+        args.get(1)
+            .and_then(|status| status.parse().ok())
+            .unwrap_or(0),
+    )
+}
+
+fn handle_type(args: Vec<&str>, builtins: Vec<&str>) {
+    let cmd = args.get(1).unwrap_or(&"");
     if builtins.contains(&cmd) {
         println!("{} is a shell builtin", cmd);
     } else if let Some(path) = find_command_path(cmd) {
@@ -65,5 +75,12 @@ fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
         }
     } else {
         eprintln!("{}: command not found", cmd);
+    }
+}
+
+fn handle_cd(args: Vec<&str>) {
+    let path = args.get(1).unwrap_or(&"");
+    if env::set_current_dir(path).is_err() {
+        eprintln!("{}: No such file or directory", path);
     }
 }
