@@ -6,9 +6,9 @@ use std::{
     process,
 };
 
-const BUILTINS: [&str; 3] = ["echo", "exit", "type"];
-
 fn main() -> Result<()> {
+    let builtins = vec!["echo", "exit", "type", "pwd"];
+
     loop {
         print!("$ ");
         io::stdout().flush()?;
@@ -17,26 +17,22 @@ fn main() -> Result<()> {
         io::stdin().read_line(&mut input)?;
 
         let input = input.trim();
-        let args: Vec<&str> = input.split_whitespace().collect();
+        let args = input.split_whitespace().collect::<Vec<&str>>();
 
-        match args.get(0) {
-            Some(&"exit") => {
-                assert_eq!(args.len(), 2);
-                process::exit(args[1].parse::<i32>()?);
+        if let Some(command) = args.get(0) {
+            match *command {
+                "exit" => process::exit(args[1].parse::<i32>()?),
+                "echo" => println!("{}", args[1..].join(" ")),
+                "type" => handle_type(args[1], builtins.clone()),
+                "pwd" => println!("{}", env::current_dir()?.display()),
+                cmd => handle_executable_or_unknown(cmd, &args[1..]),
             }
-            Some(&"echo") => println!("{}", args[1..].join(" ")),
-            Some(&"type") => {
-                assert_eq!(args.len(), 2);
-                handle_type(args[1]);
-            }
-            Some(cmd) => handle_executable_or_unknown(cmd, &args[1..]),
-            None => continue,
         }
     }
 }
 
-fn handle_type(cmd: &str) {
-    if BUILTINS.contains(&cmd) {
+fn handle_type(cmd: &str, builtins: Vec<&str>) {
+    if builtins.contains(&cmd) {
         println!("{} is a shell builtin", cmd);
     } else if let Some(path) = find_command_path(cmd) {
         println!("{} is {}", cmd, path);
