@@ -79,8 +79,11 @@ fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
 }
 
 fn handle_cd(args: Vec<&str>) {
-    let path = args.get(1).unwrap_or(&"");
-    if env::set_current_dir(path).is_err() {
+    let mut path = args.get(1).unwrap_or(&"").to_string();
+    if path == "" || path == "~" {
+        path = env::var("HOME").unwrap();
+    }
+    if env::set_current_dir(path.clone()).is_err() {
         eprintln!("{}: No such file or directory", path);
     }
 }
