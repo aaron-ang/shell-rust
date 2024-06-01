@@ -7,7 +7,7 @@ use std::{
 };
 
 fn main() -> Result<()> {
-    let builtins = vec!["echo", "exit", "type", "pwd"];
+    let builtins = vec!["exit", "echo", "type", "pwd", "cd"];
 
     loop {
         print!("$ ");
