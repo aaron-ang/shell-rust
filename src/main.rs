@@ -2,13 +2,21 @@ use anyhow::Result;
 use std::{
     env,
     io::{self, Write},
-    path::Path,
     process,
 };
+use strum::EnumString;
+
+#[derive(EnumString)]
+#[strum(ascii_case_insensitive)]
+enum Builtin {
+    Exit,
+    Echo,
+    Type,
+    Pwd,
+    Cd,
+}
 
 fn main() -> Result<()> {
-    let builtins = vec!["exit", "echo", "type", "pwd", "cd"];
-
     loop {
         print!("$ ");
         io::stdout().flush()?;
@@ -19,43 +27,48 @@ fn main() -> Result<()> {
         let input = input.trim();
         let args = input.split_whitespace().collect::<Vec<&str>>();
 
-        if let Some(command) = args.get(0) {
-            match *command {
-                "exit" => handle_exit(args),
-                "echo" => println!("{}", args[1..].join(" ")),
-                "type" => handle_type(args, builtins.clone()),
-                "pwd" => println!("{}", env::current_dir()?.display()),
-                "cd" => handle_cd(args),
-                cmd => handle_executable_or_unknown(cmd, &args[1..]),
+        if let Some(&command) = args.get(0) {
+            match Builtin::try_from(command) {
+                Ok(builtin) => match builtin {
+                    Builtin::Exit => handle_exit(args),
+                    Builtin::Echo => println!("{}", args[1..].join(" ")),
+                    Builtin::Type => handle_type(args),
+                    Builtin::Pwd => println!("{}", env::current_dir()?.display()),
+                    Builtin::Cd => handle_cd(args),
+                },
+                Err(_) => handle_executable_or_unknown(command, &args[1..]),
             }
         }
     }
 }
 
 fn handle_exit(args: Vec<&str>) -> ! {
-    process::exit(
-        args.get(1)
-            .and_then(|status| status.parse().ok())
-            .unwrap_or(0),
-    )
+    let status = args
+        .get(1)
+        .and_then(|status| status.parse().ok())
+        .unwrap_or(0);
+    process::exit(status);
 }
 
-fn handle_type(args: Vec<&str>, builtins: Vec<&str>) {
-    let cmd = args.get(1).unwrap_or(&"");
-    if builtins.contains(&cmd) {
-        println!("{} is a shell builtin", cmd);
-    } else if let Some(path) = find_command_path(cmd) {
-        println!("{} is {}", cmd, path);
-    } else {
-        println!("{}: not found", cmd);
+fn handle_type(args: Vec<&str>) {
+    if let Some(&cmd) = args.get(1) {
+        match Builtin::try_from(cmd) {
+            Ok(_) => println!("{} is a shell builtin", cmd),
+            Err(_) => {
+                if let Some(path) = find_command_path(cmd) {
+                    println!("{} is {}", cmd, path);
+                } else {
+                    println!("{}: not found", cmd);
+                }
+            }
+        }
     }
 }
 
 fn find_command_path(cmd: &str) -> Option<String> {
-    let path = env::var("PATH").unwrap_or_default();
-    let paths: Vec<&str> = path.split(':').collect();
-    for path in paths {
-        let full_path = Path::new(path).join(cmd);
+    let path_env = env::var("PATH").unwrap_or_default();
+    for path in env::split_paths(&path_env) {
+        let full_path = path.join(cmd);
         if full_path.exists() {
             return Some(full_path.display().to_string());
         }
@@ -65,8 +78,7 @@ fn find_command_path(cmd: &str) -> Option<String> {
 
 fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
     if let Some(path) = find_command_path(cmd) {
-        let output = process::Command::new(path).args(args).output();
-        match output {
+        match process::Command::new(path).args(args).output() {
             Ok(output) => {
                 io::stdout().write_all(&output.stdout).unwrap();
                 io::stderr().write_all(&output.stderr).unwrap();
@@ -79,11 +91,13 @@ fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
 }
 
 fn handle_cd(args: Vec<&str>) {
-    let mut path = args.get(1).unwrap_or(&"").to_string();
-    if path == "" || path == "~" {
-        path = env::var("HOME").unwrap();
-    }
-    if env::set_current_dir(path.clone()).is_err() {
-        eprintln!("{}: No such file or directory", path);
+    let path = args.get(1).unwrap_or(&"");
+    let new_path = if path.is_empty() || *path == "~" {
+        env::var("HOME").unwrap_or_default()
+    } else {
+        path.to_string()
+    };
+    if env::set_current_dir(&new_path).is_err() {
+        eprintln!("{}: No such file or directory", new_path);
     }
 }
