@@ -26,7 +26,13 @@ fn main() -> Result<()> {
         let mut input = String::new();
         io::stdin().read_line(&mut input)?;
 
-        let (cmd, args) = parse_args(&input)?;
+        let (cmd, args) = match parse_args(&input) {
+            Ok(result) => result,
+            Err(e) => {
+                eprintln!("{}", e);
+                continue;
+            }
+        };
 
         match Builtin::try_from(cmd) {
             Ok(builtin) => match builtin {
@@ -44,24 +50,46 @@ fn main() -> Result<()> {
 fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
     let input = input.trim();
     let (cmd, rest) = input.split_once(' ').unwrap_or((input, ""));
-    let mut args: Vec<&str> = vec![];
     let mut iter = rest.trim().chars().peekable();
+    let mut args: Vec<&str> = vec![];
+    let mut current_arg = String::new();
 
     while let Some(c) = iter.peek() {
         match c {
-            '\'' => {
-                iter.next();
-                let arg: String = iter.by_ref().take_while(|&ch| ch != '\'').collect();
-                args.push(Box::leak(arg.into_boxed_str()));
+            '\'' | '"' => {
+                let quote = iter.next().unwrap();
+                let mut found_closing = false;
+
+                while let Some(ch) = iter.next() {
+                    if ch == quote {
+                        found_closing = true;
+                        break;
+                    }
+                    current_arg.push(ch);
+                }
+
+                if !found_closing {
+                    anyhow::bail!("No closing quote found");
+                }
+
+                args.push(Box::leak(current_arg.clone().into_boxed_str()));
+                current_arg.clear();
             }
             ' ' => {
                 iter.next();
+                if !current_arg.is_empty() {
+                    args.push(Box::leak(current_arg.clone().into_boxed_str()));
+                    current_arg.clear();
+                }
             }
             _ => {
-                let arg: String = iter.by_ref().take_while(|&ch| ch != ' ').collect();
-                args.push(Box::leak(arg.into_boxed_str()));
+                current_arg.push(iter.next().unwrap());
             }
         }
+    }
+
+    if !current_arg.is_empty() {
+        args.push(Box::leak(current_arg.into_boxed_str()));
     }
 
     Ok((cmd, args))
