@@ -62,15 +62,7 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
         match c {
             '\'' | '"' => {
                 let quote = iter.next().unwrap();
-                let mut found_closing = false;
-
-                while let Some(ch) = iter.next() {
-                    if ch == quote {
-                        found_closing = true;
-                        break;
-                    }
-                    current_arg.push(ch);
-                }
+                let (mut str_arg, mut found_closing) = parse_quotes(&mut iter, quote);
 
                 while !found_closing {
                     if quote == '\'' {
@@ -83,17 +75,13 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
                     let mut line = String::new();
                     io::stdin().read_line(&mut line)?;
 
-                    for ch in line.trim().chars() {
-                        if ch == quote {
-                            found_closing = true;
-                            break;
-                        }
-                        current_arg.push(ch);
-                    }
+                    let (new_arg, new_found_closing) =
+                        parse_quotes(&mut line.trim().chars().peekable(), quote);
+                    found_closing = new_found_closing;
+                    str_arg.push_str(&new_arg);
                 }
 
-                args.push(Box::leak(current_arg.clone().into_boxed_str()));
-                current_arg.clear();
+                current_arg.push_str(&str_arg);
             }
             '\\' => {
                 iter.next();
@@ -119,6 +107,29 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
     }
 
     Ok((cmd, args))
+}
+
+fn parse_quotes(iter: &mut std::iter::Peekable<std::str::Chars>, quote: char) -> (String, bool) {
+    let mut current_arg = String::new();
+    let mut found_closing = false;
+
+    while let Some(mut ch) = iter.next() {
+        if ch == quote {
+            found_closing = true;
+            break;
+        }
+        if ch == '\\' && quote == '"' {
+            if let Some(next_ch) = iter.next() {
+                if !matches!(next_ch, '$' | '`' | '"' | '\\' | '\n') {
+                    current_arg.push('\\');
+                }
+                ch = next_ch;
+            }
+        }
+        current_arg.push(ch);
+    }
+
+    (current_arg, found_closing)
 }
 
 fn handle_exit(args: Vec<&str>) -> ! {
