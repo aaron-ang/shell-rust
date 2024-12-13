@@ -27,12 +27,16 @@ fn main() -> Result<()> {
         io::stdin().read_line(&mut input)?;
 
         let (cmd, args) = match parse_args(&input) {
-            Ok(result) => result,
+            Ok(cmd_args) => cmd_args,
             Err(e) => {
                 eprintln!("{}", e);
                 continue;
             }
         };
+
+        if cmd.is_empty() {
+            continue;
+        }
 
         match Builtin::try_from(cmd) {
             Ok(builtin) => match builtin {
@@ -68,12 +72,34 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
                     current_arg.push(ch);
                 }
 
-                if !found_closing {
-                    anyhow::bail!("No closing quote found");
+                while !found_closing {
+                    if quote == '\'' {
+                        print!("quote> ");
+                    } else {
+                        print!("dquote> ");
+                    }
+                    io::stdout().flush()?;
+
+                    let mut line = String::new();
+                    io::stdin().read_line(&mut line)?;
+
+                    for ch in line.trim().chars() {
+                        if ch == quote {
+                            found_closing = true;
+                            break;
+                        }
+                        current_arg.push(ch);
+                    }
                 }
 
                 args.push(Box::leak(current_arg.clone().into_boxed_str()));
                 current_arg.clear();
+            }
+            '\\' => {
+                iter.next();
+                if let Some(ch) = iter.next() {
+                    current_arg.push(ch);
+                }
             }
             ' ' => {
                 iter.next();
