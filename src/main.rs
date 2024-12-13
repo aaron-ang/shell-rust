@@ -52,11 +52,9 @@ fn main() -> Result<()> {
 }
 
 fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
-    let input = input.trim();
-    let (cmd, rest) = input.split_once(' ').unwrap_or((input, ""));
-    let mut iter = rest.trim().chars().peekable();
     let mut args: Vec<&str> = vec![];
     let mut current_arg = String::new();
+    let mut iter = input.trim().chars().peekable();
 
     while let Some(c) = iter.peek() {
         match c {
@@ -65,11 +63,7 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
                 let (mut str_arg, mut found_closing) = parse_quotes(&mut iter, quote);
 
                 while !found_closing {
-                    if quote == '\'' {
-                        print!("quote> ");
-                    } else {
-                        print!("dquote> ");
-                    }
+                    print!("{}quote> ", if quote == '\'' { "" } else { "d" });
                     io::stdout().flush()?;
 
                     let mut line = String::new();
@@ -105,7 +99,8 @@ fn parse_args(input: &str) -> Result<(&str, Vec<&str>)> {
     if !current_arg.is_empty() {
         args.push(Box::leak(current_arg.into_boxed_str()));
     }
-
+    let cmd = args.get(0).copied().unwrap_or_default();
+    let args = args.into_iter().skip(1).collect();
     Ok((cmd, args))
 }
 
@@ -156,14 +151,16 @@ fn handle_type(args: Vec<&str>) {
 }
 
 fn find_command_path(cmd: &str) -> Option<PathBuf> {
-    let path_env = env::var("PATH").unwrap_or_default();
-    for path in env::split_paths(&path_env) {
-        let full_path = path.join(cmd);
-        if full_path.is_file() {
-            return Some(full_path);
-        }
-    }
-    None
+    env::var("PATH").ok().and_then(|path_env| {
+        env::split_paths(&path_env).find_map(|path| {
+            let full_path = path.join(cmd);
+            if full_path.is_file() {
+                Some(full_path)
+            } else {
+                None
+            }
+        })
+    })
 }
 
 fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
@@ -183,13 +180,13 @@ fn handle_executable_or_unknown(cmd: &str, args: &[&str]) {
 }
 
 fn handle_cd(args: Vec<&str>) {
-    let path = args.get(0).unwrap_or(&"");
-    let new_path = if path.is_empty() || *path == "~" {
-        env::var("HOME").unwrap_or_default()
+    let path = args.get(0).map_or("~", |s| *s);
+    let new_path = if path == "~" {
+        env::var("HOME").unwrap_or_else(|_| String::from("/"))
     } else {
         path.to_string()
     };
     if env::set_current_dir(&new_path).is_err() {
-        eprintln!("{}: No such file or directory", new_path);
+        eprintln!("cd: {}: No such file or directory", new_path);
     }
 }
