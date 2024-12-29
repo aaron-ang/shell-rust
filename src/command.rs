@@ -1,6 +1,5 @@
-use std::{env, fmt::Display, io::Write, path::PathBuf, process};
-
 use anyhow::Result;
+use std::{env, fmt::Display, io::Write, path::PathBuf, process};
 use strum::EnumString;
 
 #[derive(EnumString)]
@@ -33,16 +32,16 @@ impl Command {
                 Builtin::Pwd => self.print_out(&env::current_dir()?.display()),
                 Builtin::Cd => self.handle_cd(),
             },
-            Err(_) => self.handle_executable_or_unknown(),
+            Err(_) => self.run_executable_or_unknown(),
         }
     }
 
-    fn handle_type(mut self) -> Result<()> {
-        if let Some(&ref cmd) = self.args.get(0) {
+    fn handle_type(&mut self) -> Result<()> {
+        if let Some(cmd) = self.args.first() {
             match Builtin::try_from(cmd.as_str()) {
                 Ok(_) => self.print_out(&format!("{} is a shell builtin", cmd))?,
                 Err(_) => {
-                    if let Some(path) = find_command_path(&cmd) {
+                    if let Some(path) = find_command_path(cmd) {
                         self.print_out(&format!("{} is {}", cmd, path.display()))?
                     } else {
                         self.print_out(&format!("{}: not found", cmd))?
@@ -53,20 +52,21 @@ impl Command {
         Ok(())
     }
 
-    fn handle_cd(mut self) -> Result<()> {
+    fn handle_cd(&mut self) -> Result<()> {
         let path = self.args.get(0).map_or("~", String::as_str);
-        let new_path = match path {
-            "~" => env::var("HOME").unwrap_or_else(|_| String::from("/")),
-            _ => path.to_string(),
+        let target = if path == "~" {
+            env::var("HOME").unwrap_or_else(|_| "/".to_string())
+        } else {
+            path.to_string()
         };
-        if let Err(_) = env::set_current_dir(&new_path) {
-            self.print_err(&format!("cd: {}: No such file or directory", new_path))?;
+        if env::set_current_dir(&target).is_err() {
+            self.print_err(&format!("cd: {}: No such file or directory", target))?;
         }
         Ok(())
     }
 
-    fn handle_executable_or_unknown(mut self) -> Result<()> {
-        if let Some(_) = find_command_path(&self.name) {
+    fn run_executable_or_unknown(&mut self) -> Result<()> {
+        if find_command_path(&self.name).is_some() {
             match process::Command::new(&self.name).args(&self.args).output() {
                 Ok(output) => {
                     self.out.write_all(&output.stdout)?;
@@ -92,11 +92,11 @@ impl Command {
 }
 
 fn find_command_path(cmd: &str) -> Option<PathBuf> {
-    env::var("PATH").ok().and_then(|path_env| {
-        env::split_paths(&path_env).find_map(|path| {
-            let full_path = path.join(cmd);
-            if full_path.is_file() {
-                Some(full_path)
+    env::var("PATH").ok().and_then(|paths| {
+        env::split_paths(&paths).find_map(|path| {
+            let full = path.join(cmd);
+            if full.is_file() {
+                Some(full)
             } else {
                 None
             }
@@ -105,9 +105,6 @@ fn find_command_path(cmd: &str) -> Option<PathBuf> {
 }
 
 fn handle_exit(args: Vec<String>) -> ! {
-    let status = args
-        .get(0)
-        .and_then(|status| status.parse().ok())
-        .unwrap_or(0);
+    let status = args.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
     process::exit(status);
 }
