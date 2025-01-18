@@ -19,23 +19,22 @@ fn main() -> Result<()> {
 
         let mut input = InputState::new();
 
-        for key in io::stdin().keys() {
-            match key? {
+        for key in io::stdin().keys().filter_map(Result::ok) {
+            match key {
                 Key::Char('\n') => {
-                    write!(stdout, "\r\n")?;
+                    writeln!(stdout, "\r")?;
                     break;
                 }
-                Key::Char('\t') => input.autocomplete()?,
+                Key::Char('\t') => input.handle_tab(&mut stdout)?,
                 Key::Ctrl('c') => {
-                    write!(stdout, "\r\n")?;
+                    writeln!(stdout)?;
                     continue 'outer;
                 }
                 Key::Ctrl('d') => {
                     if input.is_empty() {
-                        write!(stdout, "{}\r\n", clear::CurrentLine)?;
                         return Ok(());
                     } else {
-                        write!(stdout, "\x07")?; // bell
+                        input.show_completions(&mut stdout)?;
                     }
                 }
                 Key::Backspace => input.backspace(&mut stdout)?,

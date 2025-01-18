@@ -60,7 +60,7 @@ impl Command {
     }
 
     fn handle_cd(&mut self) -> Result<()> {
-        let path = self.args.get(0).map_or("~", String::as_str);
+        let path = self.args.first().map_or("~", String::as_str);
         let target = if path == "~" {
             env::var("HOME").unwrap_or_else(|_| "/".to_string())
         } else {
@@ -145,11 +145,11 @@ impl Command {
 }
 
 fn find_command_path(cmd: &str) -> Option<PathBuf> {
-    env::var("PATH").ok().and_then(|paths| {
-        env::split_paths(&paths).find_map(|path| {
-            let full = path.join(cmd);
-            if full.is_file() {
-                Some(full)
+    env::var("PATH").ok().and_then(|path_str| {
+        env::split_paths(&path_str).find_map(|path| {
+            let full_path = path.join(cmd);
+            if full_path.is_file() {
+                Some(full_path)
             } else {
                 None
             }
@@ -158,7 +158,7 @@ fn find_command_path(cmd: &str) -> Option<PathBuf> {
 }
 
 fn handle_exit(args: &[String]) -> ! {
-    let status = args.get(0).and_then(|s| s.parse().ok()).unwrap_or(0);
+    let status = args.first().and_then(|s| s.parse().ok()).unwrap_or(0);
     process::exit(status);
 }
 

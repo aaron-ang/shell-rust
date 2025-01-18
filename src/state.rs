@@ -9,9 +9,23 @@ use termion::{clear, cursor, raw::RawTerminal};
 
 use crate::command::{Builtin, Pipeline};
 
+pub const BELL: &str = "\x07";
+
+struct CompletionState {
+    prefix: String,
+    matches: Vec<String>,
+}
+
+impl CompletionState {
+    fn new(prefix: String, matches: Vec<String>) -> Self {
+        Self { prefix, matches }
+    }
+}
+
 pub struct InputState {
     input: String,
     cursor_pos: usize,
+    completion_state: Option<CompletionState>,
 }
 
 impl InputState {
@@ -19,6 +33,7 @@ impl InputState {
         Self {
             input: String::new(),
             cursor_pos: 0,
+            completion_state: None,
         }
     }
 
@@ -56,25 +71,55 @@ impl InputState {
         self.cursor_pos += 1;
     }
 
-    pub fn autocomplete(&mut self) -> Result<()> {
+    pub fn handle_tab(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
         let input = &self.input[..self.cursor_pos];
         let prefix = input.trim();
-        let matches = get_matching_executables(prefix);
-        let mut stdout = io::stdout();
-
-        if matches.is_empty() {
-            write!(stdout, "\x07")?; // Ring bell for no matches
+        if prefix.is_empty() {
+            self.insert_char('\t');
+            write!(stdout, "\t")?;
             return Ok(());
         }
 
-        write!(stdout, "\r{}", clear::CurrentLine)?;
-        self.input = matches[0].clone();
-        if matches.len() == 1 {
-            self.input.push(' ');
+        if self
+            .completion_state
+            .as_ref()
+            .map_or(false, |completion| completion.prefix == prefix)
+        {
+            let matches = &self.completion_state.as_ref().unwrap().matches;
+            writeln!(stdout, "\r")?;
+            writeln!(stdout, "{}", matches.join("  "))?;
+        } else {
+            let matches = get_matching_executables(prefix);
+            if matches.is_empty() {
+                write!(stdout, "{}", BELL)?;
+                return Ok(());
+            }
+            if matches.len() == 1 {
+                self.input = matches[0].clone();
+                self.input.push(' ');
+                self.cursor_pos = self.input.len();
+            } else {
+                write!(stdout, "{}", BELL)?;
+                self.completion_state = Some(CompletionState::new(prefix.to_string(), matches));
+                return Ok(());
+            }
         }
-        self.cursor_pos = self.input.len();
-        print!("$ {}", self.input);
 
+        write!(stdout, "\r{}", clear::CurrentLine)?;
+        print!("$ {}", self.input);
+        Ok(())
+    }
+
+    pub fn show_completions(&self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+        let matches = get_matching_executables(&self.input[..self.cursor_pos]);
+        if matches.is_empty() {
+            write!(stdout, "{}", BELL)?;
+            return Ok(());
+        }
+        writeln!(stdout, "\r")?;
+        writeln!(stdout, "{}", matches.join("  "))?;
+        write!(stdout, "\r{}", clear::CurrentLine)?;
+        print!("$ {}", self.input);
         Ok(())
     }
 
