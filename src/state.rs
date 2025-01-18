@@ -94,14 +94,21 @@ impl InputState {
                 write!(stdout, "{}", BELL)?;
                 return Ok(());
             }
+
             if matches.len() == 1 {
                 self.input = matches[0].clone();
                 self.input.push(' ');
                 self.cursor_pos = self.input.len();
             } else {
-                write!(stdout, "{}", BELL)?;
-                self.completion_state = Some(CompletionState::new(prefix.to_string(), matches));
-                return Ok(());
+                let common_prefix = find_longest_common_prefix(&matches);
+                if common_prefix.len() > prefix.len() {
+                    self.input = common_prefix;
+                    self.cursor_pos = self.input.len();
+                } else {
+                    write!(stdout, "{}", BELL)?;
+                    self.completion_state = Some(CompletionState::new(prefix.to_string(), matches));
+                    return Ok(());
+                }
             }
         }
 
@@ -157,4 +164,16 @@ fn get_matching_executables(prefix: &str) -> Vec<String> {
     matches.sort();
     matches.dedup();
     matches
+}
+
+fn find_longest_common_prefix(strings: &[String]) -> String {
+    let first = &strings[0];
+    let last = &strings[strings.len() - 1];
+
+    first
+        .chars()
+        .zip(last.chars())
+        .take_while(|(a, b)| a == b)
+        .map(|(a, _)| a)
+        .collect()
 }
