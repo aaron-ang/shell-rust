@@ -71,49 +71,67 @@ impl InputState {
         self.cursor_pos += 1;
     }
 
+    pub fn redraw_prompt(&self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+        write!(stdout, "\r{}", clear::CurrentLine)?;
+        print!("$ {}", self.input);
+        Ok(())
+    }
+
+    fn update_input(
+        &mut self,
+        new_input: String,
+        stdout: &mut RawTerminal<io::Stdout>,
+    ) -> Result<()> {
+        self.input = new_input;
+        self.cursor_pos = self.input.len();
+        self.redraw_prompt(stdout)
+    }
+
+    fn display_matches(
+        &self,
+        matches: &[String],
+        stdout: &mut RawTerminal<io::Stdout>,
+    ) -> Result<()> {
+        writeln!(stdout, "\r")?;
+        writeln!(stdout, "{}", matches.join("  "))?;
+        self.redraw_prompt(stdout)
+    }
+
     pub fn handle_tab(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
         let input = &self.input[..self.cursor_pos];
         let prefix = input.trim();
+
         if prefix.is_empty() {
             self.insert_char('\t');
             write!(stdout, "\t")?;
             return Ok(());
         }
 
-        if self
-            .completion_state
-            .as_ref()
-            .map_or(false, |completion| completion.prefix == prefix)
-        {
-            let matches = &self.completion_state.as_ref().unwrap().matches;
-            writeln!(stdout, "\r")?;
-            writeln!(stdout, "{}", matches.join("  "))?;
-        } else {
-            let matches = get_matching_executables(prefix);
-            if matches.is_empty() {
-                write!(stdout, "{}", BELL)?;
-                return Ok(());
-            }
+        let matches = match &self.completion_state {
+            Some(state) if state.prefix == prefix => state.matches.clone(),
+            _ => get_matching_executables(prefix),
+        };
 
-            if matches.len() == 1 {
-                self.input = matches[0].clone();
-                self.input.push(' ');
-                self.cursor_pos = self.input.len();
-            } else {
+        match matches.len() {
+            0 => write!(stdout, "{}", BELL)?,
+            1 => {
+                let mut completed = matches[0].clone();
+                completed.push(' ');
+                self.update_input(completed, stdout)?;
+            }
+            _ => {
                 let common_prefix = find_longest_common_prefix(&matches);
                 if common_prefix.len() > prefix.len() {
-                    self.input = common_prefix;
-                    self.cursor_pos = self.input.len();
+                    self.update_input(common_prefix, stdout)?;
                 } else {
                     write!(stdout, "{}", BELL)?;
-                    self.completion_state = Some(CompletionState::new(prefix.to_string(), matches));
-                    return Ok(());
+                    self.completion_state =
+                        Some(CompletionState::new(prefix.to_string(), matches.clone()));
+                    self.display_matches(&matches, stdout)?;
                 }
             }
         }
 
-        write!(stdout, "\r{}", clear::CurrentLine)?;
-        print!("$ {}", self.input);
         Ok(())
     }
 
@@ -123,11 +141,7 @@ impl InputState {
             write!(stdout, "{}", BELL)?;
             return Ok(());
         }
-        writeln!(stdout, "\r")?;
-        writeln!(stdout, "{}", matches.join("  "))?;
-        write!(stdout, "\r{}", clear::CurrentLine)?;
-        print!("$ {}", self.input);
-        Ok(())
+        self.display_matches(&matches, stdout)
     }
 
     pub fn run(self) -> Result<()> {
@@ -167,6 +181,10 @@ fn get_matching_executables(prefix: &str) -> Vec<String> {
 }
 
 fn find_longest_common_prefix(strings: &[String]) -> String {
+    if strings.is_empty() {
+        return String::new();
+    }
+
     let first = &strings[0];
     let last = &strings[strings.len() - 1];
 

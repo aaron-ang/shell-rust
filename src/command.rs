@@ -27,6 +27,15 @@ pub struct Command {
 }
 
 impl Command {
+    fn new() -> Self {
+        Self {
+            name: String::new(),
+            args: vec![],
+            out: Box::new(io::stdout()),
+            err: Box::new(io::stderr()),
+        }
+    }
+
     pub fn execute(&mut self) -> Result<()> {
         match Builtin::try_from(self.name.as_str()) {
             Ok(builtin) => match builtin {
@@ -60,11 +69,9 @@ impl Command {
     }
 
     fn handle_cd(&mut self) -> Result<()> {
-        let path = self.args.first().map_or("~", String::as_str);
-        let target = if path == "~" {
-            env::var("HOME").unwrap_or_else(|_| "/".to_string())
-        } else {
-            path.to_string()
+        let target = match self.args.first().map(String::as_str) {
+            Some("~") | None => env::var("HOME").unwrap_or_else(|_| "/".to_string()),
+            Some(path) => path.to_string(),
         };
         if env::set_current_dir(&target).is_err() {
             self.print_err(&format!("cd: {}: No such file or directory", target))?;
@@ -77,23 +84,13 @@ impl Command {
         iter: &mut std::iter::Peekable<std::str::Chars>,
         current_arg: &mut String,
     ) -> Result<()> {
-        let overwrite = matches!(iter.peek(), Some('>'))
-            .then(|| {
-                iter.next();
-                false
-            })
-            .unwrap_or(true);
-        let path_str: String = iter.by_ref().skip_while(|c| c.is_whitespace()).collect();
-        let path = PathBuf::from(path_str);
+        let overwrite = !matches!(iter.peek(), Some('>'));
+        if !overwrite {
+            iter.next();
+        }
 
-        let file: Box<dyn Write> = {
-            let mut opts = std::fs::OpenOptions::new();
-            opts.write(true)
-                .create(true)
-                .truncate(overwrite)
-                .append(!overwrite);
-            Box::new(opts.open(&path)?)
-        };
+        let path_str: String = iter.by_ref().skip_while(|c| c.is_whitespace()).collect();
+        let file = create_file(&path_str, overwrite)?;
 
         match current_arg.as_str() {
             "2" => self.err = file,
@@ -144,6 +141,15 @@ impl Command {
     }
 }
 
+fn create_file(path: &str, overwrite: bool) -> Result<Box<dyn Write>> {
+    let mut opts = std::fs::OpenOptions::new();
+    opts.write(true)
+        .create(true)
+        .truncate(overwrite)
+        .append(!overwrite);
+    Ok(Box::new(opts.open(path)?))
+}
+
 fn find_command_path(cmd: &str) -> Option<PathBuf> {
     env::var("PATH").ok().and_then(|path_str| {
         env::split_paths(&path_str).find_map(|path| {
@@ -168,6 +174,10 @@ pub struct Pipeline {
 }
 
 impl Pipeline {
+    pub fn new() -> Self {
+        Self { commands: vec![] }
+    }
+
     pub fn execute(&mut self) -> Result<()> {
         for cmd in &mut self.commands {
             cmd.execute()?;
@@ -176,15 +186,9 @@ impl Pipeline {
     }
 
     pub fn from_input(input: &str) -> Result<Self> {
-        let mut pipeline = Pipeline { commands: vec![] };
+        let mut pipeline = Pipeline::new();
         let mut iter = input.trim().chars().peekable();
-
-        let mut cmd = Command {
-            name: String::new(),
-            args: vec![],
-            out: Box::new(io::stdout()),
-            err: Box::new(io::stderr()),
-        };
+        let mut cmd = Command::new();
         let mut current_arg = String::new();
 
         while let Some(&ch) = iter.peek() {
