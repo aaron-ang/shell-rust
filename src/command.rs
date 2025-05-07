@@ -30,7 +30,7 @@ impl Command {
     fn new() -> Self {
         Self {
             name: String::new(),
-            args: vec![],
+            args: Vec::new(),
             out: Box::new(io::stdout()),
             err: Box::new(io::stderr()),
         }
@@ -170,12 +170,13 @@ fn handle_exit(args: &[String]) -> ! {
 
 pub struct Pipeline {
     commands: Vec<Command>,
-    // background: bool,
 }
 
 impl Pipeline {
     pub fn new() -> Self {
-        Self { commands: vec![] }
+        Self {
+            commands: Vec::new(),
+        }
     }
 
     pub fn execute(&mut self) -> Result<()> {

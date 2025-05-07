@@ -5,106 +5,161 @@ use std::{
 
 use anyhow::Result;
 use strum::IntoEnumIterator;
-use termion::{clear, cursor, raw::RawTerminal};
+use termion::{
+    clear, cursor,
+    event::Key,
+    input::TermRead,
+    raw::{IntoRawMode, RawTerminal},
+};
 
 use crate::command::{Builtin, Pipeline};
 
-pub const BELL: &str = "\x07";
+const BELL: &str = "\x07";
 
-struct CompletionState {
+struct Completion {
     prefix: String,
     matches: Vec<String>,
 }
 
-impl CompletionState {
+impl Completion {
     fn new(prefix: String, matches: Vec<String>) -> Self {
         Self { prefix, matches }
     }
 }
 
-pub struct InputState {
+pub struct Terminal {
     input: String,
     cursor_pos: usize,
-    completion_state: Option<CompletionState>,
+    stdout: RawTerminal<io::Stdout>,
+    completion_state: Option<Completion>,
 }
 
-impl InputState {
-    pub fn new() -> Self {
-        Self {
+impl Terminal {
+    pub fn new() -> Result<Self> {
+        let stdout = io::stdout().into_raw_mode()?;
+        let term = Self {
             input: String::new(),
             cursor_pos: 0,
+            stdout,
             completion_state: None,
+        };
+        Ok(term)
+    }
+
+    pub fn start(&mut self) -> Result<()> {
+        loop {
+            self.reset()?;
+            match self.process_input() {
+                Ok(should_execute) => {
+                    if should_execute {
+                        self.run()?;
+                    }
+                }
+                Err(e) => {
+                    eprintln!("Error: {}", e);
+                }
+            }
         }
     }
 
-    pub fn is_empty(&self) -> bool {
-        self.input.is_empty()
+    fn reset(&mut self) -> Result<()> {
+        self.input.clear();
+        self.cursor_pos = 0;
+        self.completion_state = None;
+        self.draw_input()?;
+        Ok(())
     }
 
-    pub fn backspace(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+    fn draw_input(&mut self) -> Result<()> {
+        write!(self.stdout, "\r{}", clear::CurrentLine)?;
+        write!(self.stdout, "$ {}", self.input)?;
+        self.stdout.flush()?;
+        Ok(())
+    }
+
+    fn process_input(&mut self) -> Result<bool> {
+        for key in io::stdin().keys().filter_map(Result::ok) {
+            match key {
+                Key::Char('\n') => {
+                    writeln!(self.stdout, "\r")?;
+                    if self.input.is_empty() {
+                        return Ok(false);
+                    }
+                    return Ok(true);
+                }
+                Key::Char('\t') => self.handle_tab()?,
+                Key::Ctrl('c') => {
+                    writeln!(self.stdout, "\r")?;
+                    return Ok(false);
+                }
+                Key::Ctrl('d') => {
+                    if self.input.is_empty() {
+                        self.stdout.suspend_raw_mode()?;
+                        std::process::exit(0);
+                    }
+                    self.show_completions()?;
+                }
+                Key::Backspace => self.backspace()?,
+                Key::Left => self.move_cursor_left()?,
+                Key::Right => self.move_cursor_right()?,
+                Key::Char(c) => self.insert_char(c)?,
+                _ => (),
+            };
+            self.stdout.flush()?;
+        }
+        Ok(true)
+    }
+
+    fn backspace(&mut self) -> Result<()> {
         if self.cursor_pos > 0 {
             self.input.remove(self.cursor_pos - 1);
             self.cursor_pos -= 1;
-            write!(stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
+            write!(self.stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
         }
         Ok(())
     }
 
-    pub fn move_cursor_left(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+    fn move_cursor_left(&mut self) -> Result<()> {
         if self.cursor_pos > 0 {
             self.cursor_pos -= 1;
-            write!(stdout, "{}", cursor::Left(1))?;
+            write!(self.stdout, "{}", cursor::Left(1))?;
         }
         Ok(())
     }
 
-    pub fn move_cursor_right(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+    fn move_cursor_right(&mut self) -> Result<()> {
         if self.cursor_pos < self.input.len() {
             self.cursor_pos += 1;
-            write!(stdout, "{}", cursor::Right(1))?;
+            write!(self.stdout, "{}", cursor::Right(1))?;
         }
         Ok(())
     }
 
-    pub fn insert_char(&mut self, c: char) {
+    fn insert_char(&mut self, c: char) -> Result<()> {
         self.input.insert(self.cursor_pos, c);
         self.cursor_pos += 1;
-    }
-
-    pub fn redraw_prompt(&self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
-        write!(stdout, "\r{}", clear::CurrentLine)?;
-        print!("$ {}", self.input);
+        write!(self.stdout, "{}", c)?;
         Ok(())
     }
 
-    fn update_input(
-        &mut self,
-        new_input: String,
-        stdout: &mut RawTerminal<io::Stdout>,
-    ) -> Result<()> {
+    fn update_input(&mut self, new_input: String) -> Result<()> {
         self.input = new_input;
         self.cursor_pos = self.input.len();
-        self.redraw_prompt(stdout)
+        self.draw_input()
     }
 
-    fn display_matches(
-        &self,
-        matches: &[String],
-        stdout: &mut RawTerminal<io::Stdout>,
-    ) -> Result<()> {
-        writeln!(stdout, "\r")?;
-        writeln!(stdout, "{}", matches.join("  "))?;
-        self.redraw_prompt(stdout)
+    fn display_matches(&mut self, matches: &[String]) -> Result<()> {
+        writeln!(self.stdout, "\r")?;
+        writeln!(self.stdout, "{}", matches.join("  "))?;
+        self.draw_input()
     }
 
-    pub fn handle_tab(&mut self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+    fn handle_tab(&mut self) -> Result<()> {
         let input = &self.input[..self.cursor_pos];
         let prefix = input.trim();
 
         if prefix.is_empty() {
-            self.insert_char('\t');
-            write!(stdout, "\t")?;
-            return Ok(());
+            return self.insert_char('\t');
         }
 
         let matches = match &self.completion_state {
@@ -113,21 +168,21 @@ impl InputState {
         };
 
         match matches.len() {
-            0 => write!(stdout, "{}", BELL)?,
+            0 => write!(self.stdout, "{}", BELL)?,
             1 => {
                 let mut completed = matches[0].clone();
                 completed.push(' ');
-                self.update_input(completed, stdout)?;
+                self.update_input(completed)?;
             }
             _ => {
                 let common_prefix = find_longest_common_prefix(&matches);
                 if common_prefix.len() > prefix.len() {
-                    self.update_input(common_prefix, stdout)?;
+                    self.update_input(common_prefix)?;
                 } else {
-                    write!(stdout, "{}", BELL)?;
+                    write!(self.stdout, "{}", BELL)?;
                     self.completion_state =
-                        Some(CompletionState::new(prefix.to_string(), matches.clone()));
-                    self.display_matches(&matches, stdout)?;
+                        Some(Completion::new(prefix.to_string(), matches.clone()));
+                    self.display_matches(&matches)?;
                 }
             }
         }
@@ -135,23 +190,25 @@ impl InputState {
         Ok(())
     }
 
-    pub fn show_completions(&self, stdout: &mut RawTerminal<io::Stdout>) -> Result<()> {
+    fn show_completions(&mut self) -> Result<()> {
         let matches = get_matching_executables(&self.input[..self.cursor_pos]);
         if matches.is_empty() {
-            write!(stdout, "{}", BELL)?;
+            write!(self.stdout, "{}", BELL)?;
             return Ok(());
         }
-        self.display_matches(&matches, stdout)
+        self.display_matches(&matches)
     }
 
-    pub fn run(self) -> Result<()> {
+    fn run(&self) -> Result<()> {
+        self.stdout.suspend_raw_mode()?;
         match Pipeline::from_input(&self.input) {
-            Ok(mut pipeline) => pipeline.execute(),
+            Ok(mut pipeline) => pipeline.execute()?,
             Err(e) => {
                 eprintln!("{e}");
-                Ok(())
             }
-        }
+        };
+        self.stdout.activate_raw_mode()?;
+        Ok(())
     }
 }
 
