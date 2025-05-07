@@ -31,24 +31,23 @@ pub struct Terminal {
     input: String,
     cursor_pos: usize,
     stdout: RawTerminal<io::Stdout>,
-    completion_state: Option<Completion>,
+    completion: Option<Completion>,
 }
 
 impl Terminal {
     pub fn new() -> Result<Self> {
-        let stdout = io::stdout().into_raw_mode()?;
         let term = Self {
             input: String::new(),
             cursor_pos: 0,
-            stdout,
-            completion_state: None,
+            stdout: io::stdout().into_raw_mode()?,
+            completion: None,
         };
         Ok(term)
     }
 
     pub fn start(&mut self) -> Result<()> {
         loop {
-            self.reset()?;
+            self.draw_input()?;
             match self.process_input() {
                 Ok(should_execute) => {
                     if should_execute {
@@ -59,15 +58,14 @@ impl Terminal {
                     eprintln!("Error: {}", e);
                 }
             }
+            self.reset();
         }
     }
 
-    fn reset(&mut self) -> Result<()> {
+    fn reset(&mut self) {
         self.input.clear();
         self.cursor_pos = 0;
-        self.completion_state = None;
-        self.draw_input()?;
-        Ok(())
+        self.completion = None;
     }
 
     fn draw_input(&mut self) -> Result<()> {
@@ -82,10 +80,7 @@ impl Terminal {
             match key {
                 Key::Char('\n') => {
                     writeln!(self.stdout, "\r")?;
-                    if self.input.is_empty() {
-                        return Ok(false);
-                    }
-                    return Ok(true);
+                    return Ok(!self.input.is_empty());
                 }
                 Key::Char('\t') => self.handle_tab()?,
                 Key::Ctrl('c') => {
@@ -95,6 +90,7 @@ impl Terminal {
                 Key::Ctrl('d') => {
                     if self.input.is_empty() {
                         self.stdout.suspend_raw_mode()?;
+                        println!();
                         std::process::exit(0);
                     }
                     self.show_completions()?;
@@ -114,6 +110,7 @@ impl Terminal {
         if self.cursor_pos > 0 {
             self.input.remove(self.cursor_pos - 1);
             self.cursor_pos -= 1;
+            // Erase the character to the left of the cursor
             write!(self.stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
         }
         Ok(())
@@ -142,6 +139,47 @@ impl Terminal {
         Ok(())
     }
 
+    fn handle_tab(&mut self) -> Result<()> {
+        let input = &self.input[..self.cursor_pos];
+        let prefix = input.trim();
+        if prefix.is_empty() {
+            return self.insert_char('\t');
+        }
+
+        // Get matches for completion:
+        // - Reuse existing matches if we have completion state with same prefix
+        // - Otherwise find new matches for the current prefix
+        let matches = match &self.completion {
+            Some(state) if state.prefix == prefix => state.matches.clone(),
+            _ => find_matching_executables(prefix),
+        };
+
+        match matches.len() {
+            0 => write!(self.stdout, "{}", BELL)?,
+            // Single match: complete with the match and add a space
+            1 => {
+                let mut completed = matches[0].clone();
+                completed.push(' ');
+                self.update_input(completed)?;
+            }
+            // Multiple matches: try partial completion or show options
+            _ => {
+                let common_prefix = longest_common_prefix(&matches);
+                // If common prefix is longer than current prefix, use it for partial completion
+                if common_prefix.len() > prefix.len() {
+                    self.update_input(common_prefix)?;
+                } else {
+                    // Show all matches
+                    self.completion = Some(Completion::new(prefix.to_string(), matches.clone()));
+                    write!(self.stdout, "{}", BELL)?;
+                    self.display_matches(&matches)?;
+                }
+            }
+        }
+
+        Ok(())
+    }
+
     fn update_input(&mut self, new_input: String) -> Result<()> {
         self.input = new_input;
         self.cursor_pos = self.input.len();
@@ -154,44 +192,8 @@ impl Terminal {
         self.draw_input()
     }
 
-    fn handle_tab(&mut self) -> Result<()> {
-        let input = &self.input[..self.cursor_pos];
-        let prefix = input.trim();
-
-        if prefix.is_empty() {
-            return self.insert_char('\t');
-        }
-
-        let matches = match &self.completion_state {
-            Some(state) if state.prefix == prefix => state.matches.clone(),
-            _ => get_matching_executables(prefix),
-        };
-
-        match matches.len() {
-            0 => write!(self.stdout, "{}", BELL)?,
-            1 => {
-                let mut completed = matches[0].clone();
-                completed.push(' ');
-                self.update_input(completed)?;
-            }
-            _ => {
-                let common_prefix = find_longest_common_prefix(&matches);
-                if common_prefix.len() > prefix.len() {
-                    self.update_input(common_prefix)?;
-                } else {
-                    write!(self.stdout, "{}", BELL)?;
-                    self.completion_state =
-                        Some(Completion::new(prefix.to_string(), matches.clone()));
-                    self.display_matches(&matches)?;
-                }
-            }
-        }
-
-        Ok(())
-    }
-
     fn show_completions(&mut self) -> Result<()> {
-        let matches = get_matching_executables(&self.input[..self.cursor_pos]);
+        let matches = find_matching_executables(&self.input[..self.cursor_pos]);
         if matches.is_empty() {
             write!(self.stdout, "{}", BELL)?;
             return Ok(());
@@ -212,7 +214,7 @@ impl Terminal {
     }
 }
 
-fn get_matching_executables(prefix: &str) -> Vec<String> {
+fn find_matching_executables(prefix: &str) -> Vec<String> {
     let mut matches = Vec::new();
     matches.extend(
         Builtin::iter()
@@ -237,14 +239,13 @@ fn get_matching_executables(prefix: &str) -> Vec<String> {
     matches
 }
 
-fn find_longest_common_prefix(strings: &[String]) -> String {
+fn longest_common_prefix(strings: &[String]) -> String {
     if strings.is_empty() {
         return String::new();
     }
-
+    assert!(strings.is_sorted());
     let first = &strings[0];
     let last = &strings[strings.len() - 1];
-
     first
         .chars()
         .zip(last.chars())
