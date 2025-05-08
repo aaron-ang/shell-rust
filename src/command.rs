@@ -1,7 +1,7 @@
 use std::{
     env,
     fmt::Display,
-    io::{self, Read, Write},
+    io::{self, Write},
     mem,
     path::PathBuf,
     process, str,
@@ -66,16 +66,6 @@ impl Command {
         let mut cmd = process::Command::new(&self.name);
         cmd.args(&self.args);
         cmd
-    }
-
-    pub fn copy_out(&mut self, mut from: impl Read) -> Result<()> {
-        io::copy(&mut from, &mut self.output)?;
-        Ok(())
-    }
-
-    pub fn copy_err(&mut self, mut from: impl Read) -> Result<()> {
-        io::copy(&mut from, &mut self.err)?;
-        Ok(())
     }
 
     pub fn execute(&mut self) -> Result<()> {

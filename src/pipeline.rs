@@ -1,4 +1,4 @@
-use std::{fs, path::PathBuf, process};
+use std::{fs, path::PathBuf};
 
 use anyhow::{anyhow, Result};
 use os_pipe::pipe;
@@ -76,7 +76,6 @@ impl Pipeline {
 
         for (i, cmd) in self.commands.iter_mut().enumerate() {
             let is_last = i == last_idx;
-
             // Prepare a pipe for this stage if not last
             let (next_reader, next_writer) = if !is_last {
                 let (r, w) = pipe()?;
@@ -84,7 +83,6 @@ impl Pipeline {
             } else {
                 (None, None)
             };
-
             if cmd.is_builtin() {
                 // Builtin: execute directly, redirect stdout if needed
                 if let Some(out) = next_writer {
@@ -94,33 +92,18 @@ impl Pipeline {
                     // last builtin
                     cmd.execute()?;
                 }
-                prev_pipe = next_reader;
             } else {
                 // External: spawn child process
                 let mut p = cmd.new_process();
-
                 if let Some(reader) = prev_pipe.take() {
                     p.stdin(reader);
                 }
-
                 if let Some(out) = next_writer {
                     p.stdout(out);
-                } else {
-                    p.stdout(process::Stdio::piped());
-                    p.stderr(process::Stdio::piped());
                 }
-
-                let mut child = p.spawn()?;
-
-                // If last, copy captured stdout/stderr into cmd output/err
-                if is_last {
-                    cmd.copy_out(&mut child.stdout.take().unwrap())?;
-                    cmd.copy_err(&mut child.stderr.take().unwrap())?;
-                }
-
-                children.push(child);
-                prev_pipe = next_reader;
+                children.push(p.spawn()?);
             }
+            prev_pipe = next_reader;
         }
 
         for mut child in children {
