@@ -29,10 +29,13 @@ impl Completion {
 }
 
 pub struct Terminal {
-    input: String,
-    cursor_pos: usize,
-    stdout: RawTerminal<io::Stdout>,
-    completion: Option<Completion>,
+    input: String,                   // Current user input string being edited
+    cursor_pos: usize,               // Current position of the cursor within the input string
+    stdout: RawTerminal<io::Stdout>, // Raw terminal output for direct terminal manipulation
+    history: Vec<String>,            // Collection of previously entered commands
+    history_index: usize,            // Current index when navigating through command history
+    last_input: String,              // User input before history navigation
+    completion: Option<Completion>,  // Tab completion state
 }
 
 impl Terminal {
@@ -41,6 +44,9 @@ impl Terminal {
             input: String::new(),
             cursor_pos: 0,
             stdout: io::stdout().into_raw_mode()?,
+            history: Vec::new(),
+            history_index: 0,
+            last_input: String::new(),
             completion: None,
         };
         Ok(term)
@@ -59,14 +65,13 @@ impl Terminal {
                     eprintln!("{e}");
                 }
             }
-            self.reset();
+            self.reset_input();
         }
     }
 
-    fn reset(&mut self) {
+    fn reset_input(&mut self) {
         self.input.clear();
         self.cursor_pos = 0;
-        self.completion = None;
     }
 
     fn draw_input(&mut self) -> Result<()> {
@@ -81,6 +86,7 @@ impl Terminal {
             match key {
                 Key::Char('\n') => {
                     writeln!(self.stdout, "\r")?;
+                    self.append_history();
                     return Ok(!self.input.is_empty());
                 }
                 Key::Char('\t') => self.handle_tab()?,
@@ -99,6 +105,8 @@ impl Terminal {
                 Key::Backspace => self.backspace()?,
                 Key::Left => self.move_cursor_left()?,
                 Key::Right => self.move_cursor_right()?,
+                Key::Up => self.get_previous_command()?,
+                Key::Down => self.get_next_command()?,
                 Key::Char(c) => self.insert_char(c)?,
                 _ => (),
             };
@@ -113,6 +121,8 @@ impl Terminal {
             self.cursor_pos -= 1;
             // Erase the character to the left of the cursor
             write!(self.stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
+        } else {
+            write!(self.stdout, "{}", BELL)?;
         }
         Ok(())
     }
@@ -131,6 +141,55 @@ impl Terminal {
             write!(self.stdout, "{}", cursor::Right(1))?;
         }
         Ok(())
+    }
+
+    fn append_history(&mut self) {
+        // Don't add empty commands or duplicates of the last command
+        let command = &self.input;
+        if command.is_empty() || (self.history.last().map_or(false, |last| last == command)) {
+            return;
+        }
+        self.history.push(command.to_string());
+        self.history_index = self.history.len();
+    }
+
+    fn get_previous_command(&mut self) -> Result<()> {
+        // Can't go back if we're at the beginning of history or history is empty
+        if self.history.is_empty() || self.history_index == 0 {
+            write!(self.stdout, "{}", BELL)?;
+            return Ok(());
+        }
+        // Save current input before moving to previous command
+        if self.history_index == self.history.len() {
+            self.last_input = self.input.clone();
+        } else {
+            self.history[self.history_index] = self.input.clone();
+        }
+        // Move to previous command
+        self.history_index -= 1;
+        self.input = self.history[self.history_index].clone();
+        self.cursor_pos = self.input.len();
+        self.draw_input()
+    }
+
+    fn get_next_command(&mut self) -> Result<()> {
+        // Check if we're already at or beyond the end of history
+        if self.history_index >= self.history.len() {
+            write!(self.stdout, "{}", BELL)?;
+            return Ok(());
+        }
+        // Save current input to the history
+        self.history[self.history_index] = self.input.clone();
+        self.history_index += 1;
+        // Set input: either from stored_input (if at end) or from history
+        if self.history_index == self.history.len() {
+            self.input = self.last_input.clone();
+        } else {
+            self.input = self.history[self.history_index].clone();
+        }
+        // Update cursor position and redraw
+        self.cursor_pos = self.input.len();
+        self.draw_input()
     }
 
     fn insert_char(&mut self, c: char) -> Result<()> {
