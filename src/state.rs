@@ -12,7 +12,8 @@ use termion::{
     raw::{IntoRawMode, RawTerminal},
 };
 
-use crate::command::{Builtin, Pipeline};
+use crate::command::Builtin;
+use crate::pipeline::Pipeline;
 
 const BELL: &str = "\x07";
 
@@ -55,7 +56,7 @@ impl Terminal {
                     }
                 }
                 Err(e) => {
-                    eprintln!("Error: {}", e);
+                    eprintln!("{e}");
                 }
             }
             self.reset();
@@ -243,7 +244,6 @@ fn longest_common_prefix(strings: &[String]) -> String {
     if strings.is_empty() {
         return String::new();
     }
-    assert!(strings.is_sorted());
     let first = &strings[0];
     let last = &strings[strings.len() - 1];
     first

@@ -1,7 +1,9 @@
 use anyhow::Result;
 
 mod command;
+mod pipeline;
 mod state;
+mod token;
 use state::Terminal;
 
 fn main() -> Result<()> {
