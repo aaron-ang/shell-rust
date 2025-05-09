@@ -103,12 +103,12 @@ impl Command {
     fn handle_type(&mut self) -> Result<()> {
         if let Some(cmd) = self.args.first() {
             match Builtin::try_from(cmd.as_str()) {
-                Ok(_) => self.print_out(format!("{} is a shell builtin", cmd))?,
+                Ok(_) => self.print_out(format!("{cmd} is a shell builtin"))?,
                 Err(_) => {
                     if let Some(path) = Self::full_path(cmd) {
-                        self.print_out(format!("{} is {}", cmd, path.display()))?
+                        self.print_out(format!("{cmd} is {}", path.display()))?
                     } else {
-                        self.print_out(format!("{}: not found", cmd))?
+                        self.print_out(format!("{cmd}: not found"))?
                     }
                 }
             }
@@ -122,7 +122,7 @@ impl Command {
             Some(path) => path.to_string(),
         };
         if env::set_current_dir(&target).is_err() {
-            self.print_err(format!("cd: {}: No such file or directory", target))?;
+            self.print_err(format!("cd: {target}: No such file or directory"))?;
         }
         Ok(())
     }

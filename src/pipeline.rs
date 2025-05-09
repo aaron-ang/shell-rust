@@ -4,7 +4,7 @@ use anyhow::{anyhow, Result};
 use os_pipe::pipe;
 
 use crate::command::Command;
-use crate::token::{tokenize, Redirect, Token};
+use crate::token::{tokenize, RedirectType, Token};
 
 pub struct Pipeline {
     commands: Vec<Command>,
@@ -28,7 +28,7 @@ impl Pipeline {
 
         for token in tokens {
             match token {
-                Token::Arg(ref arg) => cmd.push_arg(arg),
+                Token::Arg(arg) => cmd.push_arg(&arg),
                 Token::Pipe => {
                     if cmd.is_empty() {
                         return Err(anyhow!("Empty command before pipe"));
@@ -36,22 +36,22 @@ impl Pipeline {
                     pipeline.commands.push(cmd);
                     cmd = Command::new();
                 }
-                Token::Redirect(redirect) => match redirect {
-                    Redirect::Stdout { ref path, append } => {
-                        let out = create_file(path, append)?;
-                        cmd.set_output(out);
+                Token::Redirect {
+                    type_,
+                    path,
+                    append,
+                } => {
+                    let redirect_file = create_file(&path, append)?;
+                    match type_ {
+                        RedirectType::Stdout => cmd.set_output(redirect_file),
+                        RedirectType::Stderr => cmd.set_err(redirect_file),
+                        RedirectType::Both => {
+                            let err = redirect_file.try_clone()?;
+                            cmd.set_output(redirect_file);
+                            cmd.set_err(err);
+                        }
                     }
-                    Redirect::Stderr { ref path, append } => {
-                        let err = create_file(path, append)?;
-                        cmd.set_err(err);
-                    }
-                    Redirect::Both { ref path, append } => {
-                        let out = create_file(path, append)?;
-                        let err = out.try_clone()?;
-                        cmd.set_output(out);
-                        cmd.set_err(err);
-                    }
-                },
+                }
             }
         }
 

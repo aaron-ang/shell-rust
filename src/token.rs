@@ -10,13 +10,17 @@ use anyhow::{anyhow, Result};
 pub enum Token {
     Arg(String),
     Pipe,
-    Redirect(Redirect),
+    Redirect {
+        type_: RedirectType,
+        path: PathBuf,
+        append: bool,
+    },
 }
 
-pub enum Redirect {
-    Stdout { path: PathBuf, append: bool },
-    Stderr { path: PathBuf, append: bool },
-    Both { path: PathBuf, append: bool },
+pub enum RedirectType {
+    Stdout,
+    Stderr,
+    Both,
 }
 
 pub fn tokenize(input: &str) -> Result<Vec<Token>> {
@@ -142,10 +146,14 @@ fn handle_redirection(iter: &mut iter::Peekable<str::Chars>, fd_arg: &str) -> Re
     if path.as_os_str().is_empty() {
         return Err(anyhow!("No file specified for redirection"));
     }
-    let redirect = match fd_arg {
-        "2" => Redirect::Stderr { path, append }, // stderr
-        "&" => Redirect::Both { path, append },   // both stdout and stderr
-        _ => Redirect::Stdout { path, append },
+    let redirect_type = match fd_arg {
+        "2" => RedirectType::Stderr, // stderr
+        "&" => RedirectType::Both,   // both stdout and stderr
+        _ => RedirectType::Stdout,
     };
-    Ok(Token::Redirect(redirect))
+    Ok(Token::Redirect {
+        type_: redirect_type,
+        path,
+        append,
+    })
 }
