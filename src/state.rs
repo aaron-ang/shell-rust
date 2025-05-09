@@ -29,7 +29,7 @@ impl Completion {
 }
 
 pub struct Terminal {
-    input: String,                   // Current user input string being edited
+    input: Vec<char>,                // Current user input string being edited
     cursor_pos: usize,               // Current position of the cursor within the input string
     stdout: RawTerminal<io::Stdout>, // Raw terminal output for direct terminal manipulation
     history: Vec<String>,            // Collection of previously entered commands
@@ -41,7 +41,7 @@ pub struct Terminal {
 impl Terminal {
     pub fn new() -> Result<Self> {
         let term = Self {
-            input: String::new(),
+            input: Vec::new(),
             cursor_pos: 0,
             stdout: io::stdout().into_raw_mode()?,
             history: Vec::new(),
@@ -76,7 +76,7 @@ impl Terminal {
 
     fn draw_input(&mut self) -> Result<()> {
         write!(self.stdout, "\r{}", clear::CurrentLine)?;
-        write!(self.stdout, "$ {}", self.input)?;
+        write!(self.stdout, "$ {}", self.input.iter().collect::<String>())?;
         self.stdout.flush()?;
         Ok(())
     }
@@ -122,7 +122,7 @@ impl Terminal {
             // Erase the character to the left of the cursor
             write!(self.stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
         } else {
-            write!(self.stdout, "{}", BELL)?;
+            write!(self.stdout, "{BELL}")?;
         }
         Ok(())
     }
@@ -145,29 +145,30 @@ impl Terminal {
 
     fn append_history(&mut self) {
         // Don't add empty commands or duplicates of the last command
-        let command = &self.input;
-        if command.is_empty() || (self.history.last().map_or(false, |last| last == command)) {
+        let command = self.input.iter().collect::<String>();
+        if command.is_empty() || (self.history.last().map_or(false, |last| *last == command)) {
             return;
         }
-        self.history.push(command.to_string());
+        self.history.push(command);
         self.history_index = self.history.len();
     }
 
     fn get_previous_command(&mut self) -> Result<()> {
         // Can't go back if we're at the beginning of history or history is empty
         if self.history.is_empty() || self.history_index == 0 {
-            write!(self.stdout, "{}", BELL)?;
+            write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
+        let input = self.input.iter().collect::<String>();
         // Save current input before moving to previous command
         if self.history_index == self.history.len() {
-            self.last_input = self.input.clone();
+            self.last_input = input;
         } else {
-            self.history[self.history_index] = self.input.clone();
+            self.history[self.history_index] = input;
         }
         // Move to previous command
         self.history_index -= 1;
-        self.input = self.history[self.history_index].clone();
+        self.input = self.history[self.history_index].chars().collect();
         self.cursor_pos = self.input.len();
         self.draw_input()
     }
@@ -175,17 +176,17 @@ impl Terminal {
     fn get_next_command(&mut self) -> Result<()> {
         // Check if we're already at or beyond the end of history
         if self.history_index >= self.history.len() {
-            write!(self.stdout, "{}", BELL)?;
+            write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
         // Save current input to the history
-        self.history[self.history_index] = self.input.clone();
+        self.history[self.history_index] = self.input.iter().collect();
         self.history_index += 1;
         // Set input: either from stored_input (if at end) or from history
         if self.history_index == self.history.len() {
-            self.input = self.last_input.clone();
+            self.input = self.last_input.chars().collect();
         } else {
-            self.input = self.history[self.history_index].clone();
+            self.input = self.history[self.history_index].chars().collect();
         }
         // Update cursor position and redraw
         self.cursor_pos = self.input.len();
@@ -194,55 +195,66 @@ impl Terminal {
 
     fn insert_char(&mut self, c: char) -> Result<()> {
         self.input.insert(self.cursor_pos, c);
+        let suffix = &self.input[self.cursor_pos + 1..];
+        write!(self.stdout, "{c}{:?}", suffix)?;
+        // Move the cursor back so it sits just after the inserted char
+        if !suffix.is_empty() {
+            write!(self.stdout, "{}", cursor::Left(suffix.len() as u16))?;
+        }
         self.cursor_pos += 1;
-        write!(self.stdout, "{}", c)?;
         Ok(())
     }
 
     fn handle_tab(&mut self) -> Result<()> {
-        let input = &self.input[..self.cursor_pos];
-        let prefix = input.trim();
-        if prefix.is_empty() {
-            return self.insert_char('\t');
-        }
-
-        // Get matches for completion:
-        // - Reuse existing matches if we have completion state with same prefix
-        // - Otherwise find new matches for the current prefix
+        let prefix = self.input[..self.cursor_pos].iter().collect::<String>();
         let matches = match &self.completion {
             Some(state) if state.prefix == prefix => state.matches.clone(),
-            _ => find_matching_executables(prefix),
+            _ => self.get_completions(&prefix),
         };
-
         match matches.len() {
-            0 => write!(self.stdout, "{}", BELL)?,
-            // Single match: complete with the match and add a space
-            1 => {
-                let mut completed = matches[0].clone();
-                completed.push(' ');
-                self.update_input(completed)?;
-            }
-            // Multiple matches: try partial completion or show options
+            0 => write!(self.stdout, "{BELL}")?,
+            1 => self.update_input(&matches[0])?,
             _ => {
                 let common_prefix = longest_common_prefix(&matches);
-                // If common prefix is longer than current prefix, use it for partial completion
                 if common_prefix.len() > prefix.len() {
-                    self.update_input(common_prefix)?;
+                    self.update_input(&common_prefix)?;
                 } else {
                     // Show all matches
                     self.completion = Some(Completion::new(prefix.to_string(), matches.clone()));
-                    write!(self.stdout, "{}", BELL)?;
+                    write!(self.stdout, "{BELL}")?;
                     self.display_matches(&matches)?;
                 }
             }
         }
-
         Ok(())
     }
 
-    fn update_input(&mut self, new_input: String) -> Result<()> {
-        self.input = new_input;
-        self.cursor_pos = self.input.len();
+    fn get_completions(&self, prefix: &str) -> Vec<String> {
+        let words = prefix.split(' ').collect::<Vec<_>>();
+        if words.len() == 1 {
+            find_matching_executables(words[0])
+        } else {
+            find_matching_files(words[words.len() - 1])
+        }
+    }
+
+    fn update_input(&mut self, completion: &str) -> Result<()> {
+        // Find start of current token (after the last whitespace before cursor)
+        let start = self.input[..self.cursor_pos]
+            .iter()
+            .rposition(|c| c.is_whitespace())
+            .map(|i| i + 1)
+            .unwrap_or(0);
+        // Build the sequence of chars to insert
+        let mut insert = completion.chars().collect::<Vec<_>>();
+        if !completion.ends_with('/') {
+            insert.push(' '); // add a space if it's not a directory
+        }
+        let insert_len = insert.len();
+        // Replace the old token (start..cursor_pos) with `insert`
+        self.input.splice(start..self.cursor_pos, insert);
+        // Advance cursor to end of the new text
+        self.cursor_pos = start + insert_len;
         self.draw_input()
     }
 
@@ -253,9 +265,10 @@ impl Terminal {
     }
 
     fn show_completions(&mut self) -> Result<()> {
-        let matches = find_matching_executables(&self.input[..self.cursor_pos]);
+        let prefix = self.input[..self.cursor_pos].iter().collect::<String>();
+        let matches = find_matching_executables(&prefix);
         if matches.is_empty() {
-            write!(self.stdout, "{}", BELL)?;
+            write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
         self.display_matches(&matches)
@@ -263,7 +276,8 @@ impl Terminal {
 
     fn run(&self) -> Result<()> {
         self.stdout.suspend_raw_mode()?;
-        match Pipeline::from_input(&self.input) {
+        let input = self.input.iter().collect::<String>();
+        match Pipeline::from_input(&input) {
             Ok(mut pipeline) => pipeline.execute()?,
             Err(e) => {
                 eprintln!("{e}");
@@ -296,6 +310,26 @@ fn find_matching_executables(prefix: &str) -> Vec<String> {
     }
     matches.sort();
     matches.dedup();
+    matches
+}
+
+fn find_matching_files(prefix: &str) -> Vec<String> {
+    let mut matches = Vec::new();
+    if let Ok(entries) = fs::read_dir(".") {
+        for entry in entries.filter_map(Result::ok) {
+            if let Some(name) = entry.file_name().to_str() {
+                if name.starts_with(prefix) {
+                    let mut match_ = name.to_string();
+                    // Add trailing slash for directories
+                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                        match_.push('/');
+                    }
+                    matches.push(match_);
+                }
+            }
+        }
+    }
+    matches.sort();
     matches
 }
 
