@@ -1,33 +1,32 @@
 [![progress-banner](https://backend.codecrafters.io/progress/shell/ebc85b9a-41a5-43f1-a04e-0b5dac9119a6)](https://app.codecrafters.io/users/codecrafters-bot?r=2qF)
 
-This is a starting point for Rust solutions to the
-["Build Your Own Shell" Challenge](https://app.codecrafters.io/courses/shell/overview).
+This is a custom shell implementation written in Rust 🦀, built as part of the ["Build Your Own Shell" Challenge](https://app.codecrafters.io/courses/shell/overview).
 
-_Add a description of your course here_
+**Note**: If you're viewing this repo on GitHub, head over to [codecrafters.io](https://codecrafters.io) to try the challenge.
 
-**Note**: If you're viewing this repo on GitHub, head over to
-[codecrafters.io](https://codecrafters.io) to try the challenge.
+# ✨ Features
 
-# Passing the first stage
-
-The entry point for your `shell` implementation is in `src/main.rs`. Study and
-uncomment the relevant code, and push your changes to pass the first stage:
-
-```sh
-git add .
-git commit -m "pass 1st stage" # any msg
-git push origin master
-```
-
-Time to move on to the next stage!
-
-# Stage 2 & beyond
-
-Note: This section is for stages 2 and beyond.
-
-1. Ensure you have `cargo (1.70)` installed locally
-1. Run `./your_shell.sh` to run your program, which is implemented in
-   `src/main.rs`. This command compiles your Rust project, so it might be slow
-   the first time you run it. Subsequent runs will be fast.
-1. Commit your changes and run `git push origin master` to submit your solution
-   to CodeCrafters. Test output will be streamed to your terminal.
+This shell supports a variety of common command-line functionalities:
+-   🚀 **Command Execution**: Executes built-in commands (like `cd`, `exit`, `echo`, `pwd`, `type`) and external programs from your system's `PATH`.
+-   ⌨️ **Input Editing**:
+    -   Navigate text with ← and → arrow keys.
+    -   Delete characters using the Backspace key.
+    -   Insert characters at the current cursor position.
+-   📜 **Command History**:
+    -   Stores previously entered commands.
+    -   Navigate through history using the ↑ and ↓ arrow keys.
+-   🔮 **Tab Completion**:
+    -   Suggests executables (built-ins and those in `PATH`).
+    -   Autocompletes file and directory paths, including relative paths like `./` or `../`.
+    -   Completes the longest common prefix for multiple matches.
+    -   Displays all possible matches when a unique prefix can't be determined.
+-   ቧ **Pipelines**: Chain commands together by piping the output of one to the input of another using the `|` operator.
+-   ↪️ **I/O Redirection**:
+    -   Redirect `stdout` with `>` (overwrite) and `>>` (append).
+    -   Redirect `stderr` with `2>` (overwrite) and `2>>` (append).
+    -   Redirect both `stdout` and `stderr` using `&>` (overwrite) and `&>>` (append).
+-   🚦 **Signal Handling**:
+    -   `Ctrl+C`: Clears the current input line.
+    -   `Ctrl+D`:
+        -   Exits the shell if the input line is empty.
+        -   Otherwise, displays available completions (similar to a second Tab press).
