@@ -75,8 +75,10 @@ impl Terminal {
     }
 
     fn draw_input(&mut self) -> Result<()> {
-        write!(self.stdout, "\r{}", clear::CurrentLine)?;
-        write!(self.stdout, "$ {}", self.input.iter().collect::<String>())?;
+        write!(self.stdout, "\r{}$ ", clear::CurrentLine)?;
+        for c in &self.input {
+            write!(self.stdout, "{}", c)?;
+        }
         self.stdout.flush()?;
         Ok(())
     }
@@ -87,6 +89,7 @@ impl Terminal {
                 Key::Char('\n') => {
                     writeln!(self.stdout, "\r")?;
                     self.append_history();
+                    self.history_index = self.history.len();
                     return Ok(!self.input.is_empty());
                 }
                 Key::Char('\t') => self.handle_tab()?,
@@ -146,11 +149,10 @@ impl Terminal {
     fn append_history(&mut self) {
         // Don't add empty commands or duplicates of the last command
         let command = self.input.iter().collect::<String>();
-        if command.is_empty() || (self.history.last().map_or(false, |last| *last == command)) {
+        if command.is_empty() || (self.history.last().map_or(false, |last| last == &command)) {
             return;
         }
         self.history.push(command);
-        self.history_index = self.history.len();
     }
 
     fn get_previous_command(&mut self) -> Result<()> {
@@ -196,7 +198,10 @@ impl Terminal {
     fn insert_char(&mut self, c: char) -> Result<()> {
         self.input.insert(self.cursor_pos, c);
         let suffix = &self.input[self.cursor_pos + 1..];
-        write!(self.stdout, "{c}{:?}", suffix)?;
+        write!(self.stdout, "{c}")?;
+        for c in suffix {
+            write!(self.stdout, "{}", c)?;
+        }
         // Move the cursor back so it sits just after the inserted char
         if !suffix.is_empty() {
             write!(self.stdout, "{}", cursor::Left(suffix.len() as u16))?;
@@ -209,11 +214,20 @@ impl Terminal {
         let prefix = self.input[..self.cursor_pos].iter().collect::<String>();
         let matches = match &self.completion {
             Some(state) if state.prefix == prefix => state.matches.clone(),
-            _ => self.get_completions(&prefix),
+            _ => {
+                if prefix == "." || prefix == ".." {
+                    vec![prefix.clone() + "/"]
+                } else {
+                    self.get_completions(&prefix)
+                }
+            }
         };
         match matches.len() {
             0 => write!(self.stdout, "{BELL}")?,
-            1 => self.update_input(&matches[0])?,
+            1 => {
+                let completion = matches[0].clone();
+                self.update_input(&(completion + " "))?;
+            }
             _ => {
                 let common_prefix = longest_common_prefix(&matches);
                 if common_prefix.len() > prefix.len() {
@@ -230,31 +244,33 @@ impl Terminal {
     }
 
     fn get_completions(&self, prefix: &str) -> Vec<String> {
-        let words = prefix.split(' ').collect::<Vec<_>>();
-        if words.len() == 1 {
-            find_matching_executables(words[0])
+        let last_token = prefix.split(" ").last().unwrap_or("");
+        // Complete as files if there's a path separator or it's not the first word
+        if last_token.contains('/') || prefix.contains(' ') {
+            find_matching_files(last_token)
         } else {
-            find_matching_files(words[words.len() - 1])
+            find_matching_executables(last_token)
         }
     }
 
     fn update_input(&mut self, completion: &str) -> Result<()> {
-        // Find start of current token (after the last whitespace before cursor)
-        let start = self.input[..self.cursor_pos]
+        // Find the start of the current token being completed
+        let token_start = self.input[..self.cursor_pos]
             .iter()
             .rposition(|c| c.is_whitespace())
-            .map(|i| i + 1)
-            .unwrap_or(0);
-        // Build the sequence of chars to insert
-        let mut insert = completion.chars().collect::<Vec<_>>();
-        if !completion.ends_with('/') {
-            insert.push(' '); // add a space if it's not a directory
-        }
-        let insert_len = insert.len();
-        // Replace the old token (start..cursor_pos) with `insert`
-        self.input.splice(start..self.cursor_pos, insert);
-        // Advance cursor to end of the new text
-        self.cursor_pos = start + insert_len;
+            .map_or(0, |pos| pos + 1);
+        // For file paths, we only want to replace after the last slash
+        let insertion_start = self.input[token_start..self.cursor_pos]
+            .iter()
+            .rposition(|&c| c == '/')
+            .map_or(token_start, |pos| token_start + pos + 1);
+        // Create the replacement text, adding a space for completed words
+        let completion_chars: Vec<char> = completion.chars().collect();
+        // Replace the partial text with the completion
+        self.input
+            .splice(insertion_start..self.cursor_pos, completion_chars.clone());
+        self.cursor_pos = insertion_start + completion_chars.len();
+        // Redraw the input with the completion
         self.draw_input()
     }
 
@@ -290,11 +306,13 @@ impl Terminal {
 
 fn find_matching_executables(prefix: &str) -> Vec<String> {
     let mut matches = Vec::new();
+    // Builtin commands
     matches.extend(
         Builtin::iter()
             .map(|b| b.to_string().to_lowercase())
             .filter(|b| b.starts_with(prefix)),
     );
+    // Executables in PATH
     if let Some(path) = env::var_os("PATH") {
         for dir in env::split_paths(&path) {
             if let Ok(entries) = fs::read_dir(dir) {
@@ -314,17 +332,26 @@ fn find_matching_executables(prefix: &str) -> Vec<String> {
 }
 
 fn find_matching_files(prefix: &str) -> Vec<String> {
+    if prefix == "." || prefix == ".." {
+        return vec![format!("{}/", prefix)];
+    }
+
     let mut matches = Vec::new();
-    if let Ok(entries) = fs::read_dir(".") {
+    let (dir, stem) = if let Some(pos) = prefix.rfind('/') {
+        prefix.split_at(pos + 1)
+    } else {
+        (".", prefix)
+    };
+    if let Ok(entries) = fs::read_dir(dir) {
         for entry in entries.filter_map(Result::ok) {
             if let Some(name) = entry.file_name().to_str() {
-                if name.starts_with(prefix) {
-                    let mut match_ = name.to_string();
-                    // Add trailing slash for directories
+                if name.starts_with(stem) {
+                    let mut candidate = name.to_string();
+                    // Add trailing slash if it's a directory
                     if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
-                        match_.push('/');
+                        candidate.push('/');
                     }
-                    matches.push(match_);
+                    matches.push(candidate);
                 }
             }
         }
