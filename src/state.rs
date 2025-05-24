@@ -13,6 +13,7 @@ use termion::{
 };
 
 use crate::command::Builtin;
+use crate::history::History;
 use crate::pipeline::Pipeline;
 
 const BELL: &str = "\x07";
@@ -28,14 +29,32 @@ impl Completion {
     }
 }
 
+enum ProcessResult {
+    Continue(bool),
+    Exit,
+}
+
 pub struct Terminal {
-    input: Vec<char>,                // Current user input string being edited
-    cursor_pos: usize,               // Current position of the cursor within the input string
-    stdout: RawTerminal<io::Stdout>, // Raw terminal output for direct terminal manipulation
-    history: Vec<String>,            // Collection of previously entered commands
-    history_index: usize,            // Current index when navigating through command history
-    last_input: String,              // User input before history navigation
-    completion: Option<Completion>,  // Tab completion state
+    /// Input buffer for the command line
+    input: Vec<char>,
+    /// Current position of the cursor in the input string
+    cursor_pos: usize,
+    /// Raw terminal output for direct terminal manipulation
+    stdout: RawTerminal<io::Stdout>,
+    /// History of previously entered commands
+    history: History,
+    /// Current index in the command history
+    history_index: usize,
+    /// Last command entered before navigating history
+    last_input: String,
+    /// Tab completion state
+    completion: Option<Completion>,
+}
+
+impl Drop for Terminal {
+    fn drop(&mut self) {
+        let _ = self.history.save();
+    }
 }
 
 impl Terminal {
@@ -44,7 +63,7 @@ impl Terminal {
             input: Vec::new(),
             cursor_pos: 0,
             stdout: io::stdout().into_raw_mode()?,
-            history: Vec::new(),
+            history: History::open(),
             history_index: 0,
             last_input: String::new(),
             completion: None,
@@ -56,14 +75,16 @@ impl Terminal {
         loop {
             self.draw_input()?;
             match self.process_input() {
-                Ok(should_execute) => {
+                Ok(ProcessResult::Continue(should_execute)) => {
                     if should_execute {
                         self.run()?;
                     }
                 }
-                Err(e) => {
-                    eprintln!("{e}");
+                Ok(ProcessResult::Exit) => {
+                    println!();
+                    return Ok(());
                 }
+                Err(e) => eprintln!("{e}"),
             }
             self.reset_input();
         }
@@ -83,25 +104,23 @@ impl Terminal {
         Ok(())
     }
 
-    fn process_input(&mut self) -> Result<bool> {
+    fn process_input(&mut self) -> Result<ProcessResult> {
         for key in io::stdin().keys().filter_map(Result::ok) {
             match key {
                 Key::Char('\n') => {
                     writeln!(self.stdout, "\r")?;
                     self.append_history();
-                    self.history_index = self.history.len();
-                    return Ok(!self.input.is_empty());
+                    return Ok(ProcessResult::Continue(!self.input.is_empty()));
                 }
                 Key::Char('\t') => self.handle_tab()?,
                 Key::Ctrl('c') => {
                     writeln!(self.stdout, "\r")?;
-                    return Ok(false);
+                    return Ok(ProcessResult::Continue(false));
                 }
                 Key::Ctrl('d') => {
                     if self.input.is_empty() {
                         self.stdout.suspend_raw_mode()?;
-                        println!();
-                        std::process::exit(0);
+                        return Ok(ProcessResult::Exit);
                     }
                     self.show_completions()?;
                 }
@@ -115,7 +134,7 @@ impl Terminal {
             };
             self.stdout.flush()?;
         }
-        Ok(true)
+        Ok(ProcessResult::Continue(true))
     }
 
     fn backspace(&mut self) -> Result<()> {
@@ -147,48 +166,50 @@ impl Terminal {
     }
 
     fn append_history(&mut self) {
-        // Don't add empty commands or duplicates of the last command
         let command = self.input.iter().collect::<String>();
-        if command.is_empty() || (self.history.last().map_or(false, |last| last == &command)) {
-            return;
-        }
-        self.history.push(command);
+        self.history.add(command);
+        self.history_index = self.history.len();
     }
 
     fn get_previous_command(&mut self) -> Result<()> {
         // Can't go back if we're at the beginning of history or history is empty
-        if self.history.is_empty() || self.history_index == 0 {
+        let history_len = self.history.len();
+        if history_len == 0 || self.history_index == 0 {
             write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
-        let input = self.input.iter().collect::<String>();
         // Save current input before moving to previous command
-        if self.history_index == self.history.len() {
+        let input = self.input.iter().collect::<String>();
+        if self.history_index == history_len {
             self.last_input = input;
         } else {
-            self.history[self.history_index] = input;
+            self.history.set(self.history_index, input);
         }
         // Move to previous command
         self.history_index -= 1;
-        self.input = self.history[self.history_index].chars().collect();
-        self.cursor_pos = self.input.len();
+        if let Some(cmd) = self.history.get(self.history_index) {
+            self.input = cmd.chars().collect();
+            self.cursor_pos = self.input.len();
+        }
         self.draw_input()
     }
 
     fn get_next_command(&mut self) -> Result<()> {
         // Check if we're already at or beyond the end of history
-        if self.history_index >= self.history.len() {
+        let history_len = self.history.len();
+        if self.history_index >= history_len {
             write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
         // Save current input to the history
-        self.history[self.history_index] = self.input.iter().collect();
+        self.history
+            .set(self.history_index, self.input.iter().collect());
         self.history_index += 1;
         // Set input: either from stored_input (if at end) or from history
-        if self.history_index == self.history.len() {
+        if self.history_index == history_len {
             self.input = self.last_input.chars().collect();
-        } else {
-            self.input = self.history[self.history_index].chars().collect();
+        } else if let Some(cmd) = self.history.get(self.history_index) {
+            self.input = cmd.chars().collect();
         }
         // Update cursor position and redraw
         self.cursor_pos = self.input.len();
@@ -293,7 +314,7 @@ impl Terminal {
     fn run(&self) -> Result<()> {
         self.stdout.suspend_raw_mode()?;
         let input = self.input.iter().collect::<String>();
-        match Pipeline::from_input(&input) {
+        match Pipeline::new(&input, self.history.clone()) {
             Ok(mut pipeline) => pipeline.execute()?,
             Err(e) => {
                 eprintln!("{e}");

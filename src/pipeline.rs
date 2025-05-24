@@ -4,28 +4,27 @@ use anyhow::{anyhow, Result};
 use os_pipe::pipe;
 
 use crate::command::Command;
+use crate::history::History;
 use crate::token::{tokenize, RedirectType, Token};
 
 pub struct Pipeline {
     commands: Vec<Command>,
+    history: History,
 }
 
 impl Pipeline {
-    pub fn new() -> Self {
-        Self {
+    pub fn new(input: &str, history: History) -> Result<Self> {
+        let mut pipeline = Self {
             commands: Vec::new(),
-        }
-    }
-
-    pub fn from_input(input: &str) -> Result<Self> {
+            history,
+        };
         let tokens = tokenize(input)?;
-        Self::from_tokens(tokens)
+        pipeline.parse_tokens(tokens)?;
+        Ok(pipeline)
     }
 
-    fn from_tokens(tokens: Vec<Token>) -> Result<Self> {
-        let mut pipeline = Pipeline::new();
-        let mut cmd = Command::new();
-
+    fn parse_tokens(&mut self, tokens: Vec<Token>) -> Result<()> {
+        let mut cmd = Command::new(self.history.clone());
         for token in tokens {
             match token {
                 Token::Arg(arg) => cmd.push_arg(&arg),
@@ -33,8 +32,8 @@ impl Pipeline {
                     if cmd.is_empty() {
                         return Err(anyhow!("Empty command before pipe"));
                     }
-                    pipeline.commands.push(cmd);
-                    cmd = Command::new();
+                    self.commands.push(cmd);
+                    cmd = Command::new(self.history.clone());
                 }
                 Token::Redirect {
                     type_,
@@ -54,12 +53,10 @@ impl Pipeline {
                 }
             }
         }
-
         if !cmd.is_empty() {
-            pipeline.commands.push(cmd);
+            self.commands.push(cmd);
         }
-
-        Ok(pipeline)
+        Ok(())
     }
 
     pub fn execute(&mut self) -> Result<()> {

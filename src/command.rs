@@ -8,15 +8,17 @@ use std::{
 };
 
 use anyhow::Result;
-
 use strum::{Display, EnumIter, EnumString};
+
+use crate::history::History;
 
 #[derive(EnumIter, EnumString, Display)]
 #[strum(ascii_case_insensitive)]
 pub enum Builtin {
     Cd,
-    Exit,
     Echo,
+    Exit,
+    History,
     Pwd,
     Type,
 }
@@ -26,15 +28,17 @@ pub struct Command {
     args: Vec<String>,
     output: Box<dyn Write>,
     err: Box<dyn Write>,
+    history: History,
 }
 
 impl Command {
-    pub fn new() -> Self {
+    pub fn new(history: History) -> Self {
         Self {
             name: String::new(),
             args: Vec::new(),
             output: Box::new(io::stdout()),
             err: Box::new(io::stderr()),
+            history,
         }
     }
 
@@ -71,14 +75,15 @@ impl Command {
     pub fn execute(&mut self) -> Result<()> {
         match Builtin::try_from(self.name.as_str()) {
             Ok(builtin) => match builtin {
-                Builtin::Exit => self.handle_exit(),
+                Builtin::Cd => self.handle_cd(),
                 Builtin::Echo => {
                     let arg_str = self.args.join(" ");
                     self.print_out(arg_str)
                 }
-                Builtin::Type => self.handle_type(),
+                Builtin::Exit => self.handle_exit(),
+                Builtin::History => self.handle_history(),
                 Builtin::Pwd => self.print_out(env::current_dir()?.display()),
-                Builtin::Cd => self.handle_cd(),
+                Builtin::Type => self.handle_type(),
             },
             Err(_) => self.execute_external_command(),
         }
@@ -91,6 +96,17 @@ impl Command {
         Ok(())
     }
 
+    fn handle_cd(&mut self) -> Result<()> {
+        let target = match self.args.first().map(String::as_str) {
+            Some("~") | None => env::var("HOME").unwrap_or_else(|_| "/".to_string()),
+            Some(path) => path.to_string(),
+        };
+        if env::set_current_dir(&target).is_err() {
+            self.print_err(format!("cd: {target}: No such file or directory"))?;
+        }
+        Ok(())
+    }
+
     fn handle_exit(&self) -> ! {
         let status = self
             .args
@@ -98,6 +114,26 @@ impl Command {
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
         process::exit(status);
+    }
+
+    fn handle_history(&mut self) -> Result<()> {
+        if self.args.len() > 1 {
+            return self.print_err("history: too many arguments");
+        }
+        match self.args.first() {
+            None => self.history.print(&mut self.output, None),
+            Some(arg) if arg == "-c" => {
+                self.history.clear();
+                Ok(())
+            }
+            Some(arg) if arg.starts_with('-') => {
+                self.print_err(format!("history: {arg}: invalid option"))
+            }
+            Some(arg) => match arg.parse::<usize>() {
+                Ok(limit) => self.history.print(&mut self.output, Some(limit)),
+                Err(_) => self.print_err(format!("history: {arg}: numeric argument required")),
+            },
+        }
     }
 
     fn handle_type(&mut self) -> Result<()> {
@@ -112,17 +148,6 @@ impl Command {
                     }
                 }
             }
-        }
-        Ok(())
-    }
-
-    fn handle_cd(&mut self) -> Result<()> {
-        let target = match self.args.first().map(String::as_str) {
-            Some("~") | None => env::var("HOME").unwrap_or_else(|_| "/".to_string()),
-            Some(path) => path.to_string(),
-        };
-        if env::set_current_dir(&target).is_err() {
-            self.print_err(format!("cd: {target}: No such file or directory"))?;
         }
         Ok(())
     }

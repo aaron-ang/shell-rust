@@ -1,6 +1,7 @@
 use anyhow::Result;
 
 mod command;
+mod history;
 mod pipeline;
 mod state;
 mod token;
