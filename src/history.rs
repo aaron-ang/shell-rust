@@ -31,17 +31,19 @@ impl History {
 
     pub fn add(&mut self, command: String) {
         // Don't add empty commands or duplicates of the last command
-        if command.is_empty()
-            || self
-                .entries
-                .read()
-                .unwrap()
-                .last()
-                .map_or(false, |last| last == &command)
-        {
+        if command.is_empty() {
             return;
         }
-        self.entries.write().unwrap().push(command.clone());
+        let is_duplicate = self
+            .entries
+            .read()
+            .unwrap()
+            .last()
+            .map_or(false, |last| last == &command);
+        if is_duplicate {
+            return;
+        }
+        self.entries.write().unwrap().push(command);
     }
 
     pub fn get(&self, index: usize) -> Option<String> {
@@ -50,7 +52,8 @@ impl History {
 
     pub fn set(&mut self, index: usize, command: String) {
         if index < self.entries.read().unwrap().len() {
-            self.entries.write().unwrap()[index] = command;
+            let mut entries = self.entries.write().unwrap();
+            entries[index] = command;
         }
     }
 
@@ -63,7 +66,7 @@ impl History {
         let limit = limit.unwrap_or(entries.len());
         let start = entries.len().saturating_sub(limit);
         for (i, cmd) in entries.iter().skip(start).enumerate() {
-            writeln!(writer, "    {} {}", i + 1, cmd)?;
+            writeln!(writer, "{:5} {}", start + i + 1, cmd)?;
         }
         Ok(())
     }

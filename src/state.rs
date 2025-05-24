@@ -59,12 +59,14 @@ impl Drop for Terminal {
 
 impl Terminal {
     pub fn new() -> Result<Self> {
+        let history = History::open();
+        let history_len = history.len();
         let term = Self {
             input: Vec::new(),
             cursor_pos: 0,
             stdout: io::stdout().into_raw_mode()?,
-            history: History::open(),
-            history_index: 0,
+            history,
+            history_index: history_len,
             last_input: String::new(),
             completion: None,
         };
