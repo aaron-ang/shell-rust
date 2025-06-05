@@ -1,6 +1,8 @@
 use std::{
+    env,
     fs::{self, File},
     io::{BufWriter, Write},
+    path::Path,
     sync::{Arc, RwLock},
 };
 
@@ -11,11 +13,10 @@ pub struct History {
     entries: Arc<RwLock<Vec<String>>>,
 }
 
-const HISTORY_FILE_PATH: &str = ".history";
-
 impl History {
     pub fn open() -> Self {
-        let entries = if let Ok(history) = fs::read_to_string(HISTORY_FILE_PATH) {
+        let histfile = env::var("HISTFILE").unwrap_or_default();
+        let entries = if let Ok(history) = fs::read_to_string(histfile) {
             history.lines().map(String::from).collect()
         } else {
             Vec::new()
@@ -23,6 +24,15 @@ impl History {
         Self {
             entries: Arc::new(RwLock::new(entries)),
         }
+    }
+
+    pub fn append_from_file<P: AsRef<Path>>(&self, path: P) {
+        let entries = if let Ok(history) = fs::read_to_string(path) {
+            history.lines().map(String::from).collect()
+        } else {
+            Vec::new()
+        };
+        self.entries.write().unwrap().extend(entries);
     }
 
     pub fn len(&self) -> usize {
@@ -72,7 +82,8 @@ impl History {
     }
 
     pub fn save(&self) -> std::io::Result<()> {
-        let file = File::create(HISTORY_FILE_PATH)?;
+        let histfile = env::var("HISTFILE").unwrap_or_default();
+        let file = File::create(histfile)?;
         let mut writer = BufWriter::new(file);
         for entry in self.entries.read().unwrap().iter() {
             writeln!(writer, "{}", entry)?;

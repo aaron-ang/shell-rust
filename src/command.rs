@@ -76,10 +76,7 @@ impl Command {
         match Builtin::try_from(self.name.as_str()) {
             Ok(builtin) => match builtin {
                 Builtin::Cd => self.handle_cd(),
-                Builtin::Echo => {
-                    let arg_str = self.args.join(" ");
-                    self.print_out(arg_str)
-                }
+                Builtin::Echo => self.handle_echo(),
                 Builtin::Exit => self.handle_exit(),
                 Builtin::History => self.handle_history(),
                 Builtin::Pwd => self.print_out(env::current_dir()?.display()),
@@ -107,6 +104,11 @@ impl Command {
         Ok(())
     }
 
+    fn handle_echo(&mut self) -> Result<()> {
+        let arg_str = self.args.join(" ");
+        self.print_out(arg_str)
+    }
+
     fn handle_exit(&self) -> ! {
         let status = self
             .args
@@ -117,13 +119,15 @@ impl Command {
     }
 
     fn handle_history(&mut self) -> Result<()> {
-        if self.args.len() > 1 {
-            return self.print_err("history: too many arguments");
-        }
-        match self.args.first() {
+        match self.args.first().map(String::as_str) {
             None => self.history.print(&mut self.output, None),
-            Some(arg) if arg == "-c" => {
+            Some("-c") => {
                 self.history.clear();
+                Ok(())
+            }
+            Some("-r") => {
+                let file = self.args.get(1).map(PathBuf::from).unwrap_or_default();
+                self.history.append_from_file(file);
                 Ok(())
             }
             Some(arg) if arg.starts_with('-') => {
