@@ -26,15 +26,6 @@ impl History {
         }
     }
 
-    pub fn append_from_file<P: AsRef<Path>>(&self, path: P) {
-        let entries = if let Ok(history) = fs::read_to_string(path) {
-            history.lines().map(String::from).collect()
-        } else {
-            Vec::new()
-        };
-        self.entries.write().unwrap().extend(entries);
-    }
-
     pub fn len(&self) -> usize {
         self.entries.read().unwrap().len()
     }
@@ -81,13 +72,27 @@ impl History {
         Ok(())
     }
 
-    pub fn save(&self) -> std::io::Result<()> {
+    pub fn save(&self) -> Result<()> {
         let histfile = env::var("HISTFILE").unwrap_or_default();
-        let file = File::create(histfile)?;
+        self.write_to_file(histfile)
+    }
+
+    pub fn append_from_file<P: AsRef<Path>>(&self, path: P) {
+        let entries = if let Ok(history) = fs::read_to_string(path) {
+            history.lines().map(String::from).collect()
+        } else {
+            Vec::new()
+        };
+        self.entries.write().unwrap().extend(entries);
+    }
+
+    pub fn write_to_file<P: AsRef<Path>>(&self, path: P) -> Result<()> {
+        let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
         for entry in self.entries.read().unwrap().iter() {
             writeln!(writer, "{}", entry)?;
         }
-        writer.flush()
+        writer.flush()?;
+        Ok(())
     }
 }

@@ -130,6 +130,11 @@ impl Command {
                 self.history.append_from_file(file);
                 Ok(())
             }
+            Some("-w") => {
+                let file = self.args.get(1).map(PathBuf::from).unwrap_or_default();
+                self.history.write_to_file(file)?;
+                Ok(())
+            }
             Some(arg) if arg.starts_with('-') => {
                 self.print_err(format!("history: {arg}: invalid option"))
             }
