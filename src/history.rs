@@ -8,6 +8,8 @@ use std::{
 
 use anyhow::Result;
 
+const HISTFILE_ENV: &str = "HISTFILE";
+
 #[derive(Clone)]
 pub struct History {
     inner: Arc<RwLock<HistoryData>>,
@@ -20,12 +22,10 @@ struct HistoryData {
 
 impl History {
     pub fn open() -> Self {
-        let histfile = env::var("HISTFILE").unwrap_or_default();
-        let entries = if let Ok(history) = fs::read_to_string(histfile) {
-            history.lines().map(String::from).collect()
-        } else {
-            Vec::new()
-        };
+        let histfile = env::var(HISTFILE_ENV).unwrap_or_default();
+        let entries = fs::read_to_string(histfile)
+            .map(|s| s.lines().map(String::from).collect::<Vec<_>>())
+            .unwrap_or_default();
         let len = entries.len();
         let data = HistoryData {
             entries,
@@ -79,8 +79,8 @@ impl History {
     }
 
     pub fn save(&self) -> Result<()> {
-        let histfile = env::var("HISTFILE").unwrap_or_default();
-        self.write_to_file(histfile)
+        let histfile = env::var(HISTFILE_ENV).unwrap_or_default();
+        self.append_to_file(histfile)
     }
 
     pub fn append_from_file<P: AsRef<Path>>(&self, path: P) {

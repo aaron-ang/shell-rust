@@ -115,6 +115,7 @@ impl Command {
             .first()
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
+        let _ = self.history.save();
         process::exit(status);
     }
 
