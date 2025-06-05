@@ -119,29 +119,30 @@ impl Command {
     }
 
     fn handle_history(&mut self) -> Result<()> {
-        match self.args.first().map(String::as_str) {
+        let mut args = self.args.iter().map(String::as_str);
+        match args.next() {
             None => self.history.print(&mut self.output, None),
-            Some("-c") => {
-                self.history.clear();
-                Ok(())
+            Some("-c") => Ok(self.history.clear()),
+            Some(opt @ ("-r" | "-w" | "-a")) => {
+                let file = args.next().map(PathBuf::from).unwrap_or_default();
+                match opt {
+                    "-r" => self.history.append_from_file(file),
+                    "-w" => self.history.write_to_file(file)?,
+                    "-a" => self.history.append_to_file(file)?,
+                    _ => unreachable!(),
+                }
+                return Ok(());
             }
-            Some("-r") => {
-                let file = self.args.get(1).map(PathBuf::from).unwrap_or_default();
-                self.history.append_from_file(file);
-                Ok(())
+            Some(flag) if flag.starts_with('-') => {
+                self.print_err(format!("history: {flag}: invalid option"))
             }
-            Some("-w") => {
-                let file = self.args.get(1).map(PathBuf::from).unwrap_or_default();
-                self.history.write_to_file(file)?;
-                Ok(())
+            Some(arg) => {
+                if let Ok(n) = arg.parse::<usize>() {
+                    self.history.print(&mut self.output, Some(n))
+                } else {
+                    self.print_err(format!("history: {arg}: numeric argument required"))
+                }
             }
-            Some(arg) if arg.starts_with('-') => {
-                self.print_err(format!("history: {arg}: invalid option"))
-            }
-            Some(arg) => match arg.parse::<usize>() {
-                Ok(limit) => self.history.print(&mut self.output, Some(limit)),
-                Err(_) => self.print_err(format!("history: {arg}: numeric argument required")),
-            },
         }
     }
 
