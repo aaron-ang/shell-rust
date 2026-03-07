@@ -41,16 +41,10 @@ impl History {
     }
 
     pub fn add(&mut self, command: String) {
-        // Don't add empty commands or duplicates of the last command
         if command.is_empty() {
             return;
         }
-        let mut data = self.inner.write().unwrap();
-        let is_duplicate = data.entries.last().map_or(false, |last| last == &command);
-        if is_duplicate {
-            return;
-        }
-        data.entries.push(command);
+        self.inner.write().unwrap().entries.push(command);
     }
 
     pub fn get(&self, index: usize) -> Option<String> {

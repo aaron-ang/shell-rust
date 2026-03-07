@@ -8,6 +8,7 @@ use std::{
 };
 
 use anyhow::Result;
+use is_executable::IsExecutable;
 use strum::{Display, EnumIter, EnumString};
 
 use crate::history::History;
@@ -183,7 +184,7 @@ impl Command {
         env::var("PATH").ok().and_then(|path_str| {
             env::split_paths(&path_str).find_map(|path| {
                 let full_path = path.join(cmd);
-                full_path.is_file().then_some(full_path)
+                full_path.is_executable().then_some(full_path)
             })
         })
     }
