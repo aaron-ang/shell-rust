@@ -248,8 +248,11 @@ impl Terminal {
         match matches.len() {
             0 => write!(self.stdout, "{BELL}")?,
             1 => {
-                let completion = matches[0].clone();
-                self.update_input(&(completion + " "))?;
+                let mut completion = matches[0].clone();
+                if !completion.ends_with('/') {
+                    completion += " ";
+                }
+                self.update_input(&completion)?;
             }
             _ => {
                 let common_prefix = longest_common_prefix(&matches);
