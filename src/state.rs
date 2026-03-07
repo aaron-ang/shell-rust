@@ -100,7 +100,12 @@ impl Terminal {
     fn draw_input(&mut self) -> Result<()> {
         write!(self.stdout, "\r{}$ ", clear::CurrentLine)?;
         for c in &self.input {
-            write!(self.stdout, "{}", c)?;
+            write!(self.stdout, "{c}")?;
+        }
+        // Reposition cursor to just after the inserted char
+        let n = self.input.len().saturating_sub(self.cursor_pos);
+        if n > 0 {
+            write!(self.stdout, "{}", cursor::Left(n as u16))?;
         }
         self.stdout.flush()?;
         Ok(())
@@ -143,12 +148,11 @@ impl Terminal {
         if self.cursor_pos > 0 {
             self.input.remove(self.cursor_pos - 1);
             self.cursor_pos -= 1;
-            // Erase the character to the left of the cursor
-            write!(self.stdout, "{} {}", cursor::Left(1), cursor::Left(1))?;
+            self.draw_input()
         } else {
             write!(self.stdout, "{BELL}")?;
+            Ok(())
         }
-        Ok(())
     }
 
     fn move_cursor_left(&mut self) -> Result<()> {
@@ -220,17 +224,8 @@ impl Terminal {
 
     fn insert_char(&mut self, c: char) -> Result<()> {
         self.input.insert(self.cursor_pos, c);
-        let suffix = &self.input[self.cursor_pos + 1..];
-        write!(self.stdout, "{c}")?;
-        for c in suffix {
-            write!(self.stdout, "{}", c)?;
-        }
-        // Move the cursor back so it sits just after the inserted char
-        if !suffix.is_empty() {
-            write!(self.stdout, "{}", cursor::Left(suffix.len() as u16))?;
-        }
         self.cursor_pos += 1;
-        Ok(())
+        self.draw_input()
     }
 
     fn handle_tab(&mut self) -> Result<()> {
@@ -259,10 +254,14 @@ impl Terminal {
                 if common_prefix.len() > prefix.len() {
                     self.update_input(&common_prefix)?;
                 } else {
-                    // Show all matches
+                    // First TAB: ring bell only.
+                    // Second TAB (cached): ring bell and show list.
+                    let was_cached = self.completion.as_ref().is_some_and(|s| s.prefix == prefix);
                     self.completion = Some(Completion::new(prefix.to_string(), matches.clone()));
                     write!(self.stdout, "{BELL}")?;
-                    self.display_matches(&matches)?;
+                    if was_cached {
+                        self.display_matches(&matches)?;
+                    }
                 }
             }
         }

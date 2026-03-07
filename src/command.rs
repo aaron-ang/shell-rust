@@ -124,7 +124,10 @@ impl Command {
         let mut args = self.args.iter().map(String::as_str);
         match args.next() {
             None => self.history.print(&mut self.output, None),
-            Some("-c") => Ok(self.history.clear()),
+            Some("-c") => {
+                self.history.clear();
+                Ok(())
+            },
             Some(opt @ ("-r" | "-w" | "-a")) => {
                 let file = args.next().map(PathBuf::from).unwrap_or_default();
                 match opt {
@@ -133,7 +136,7 @@ impl Command {
                     "-a" => self.history.append_to_file(file)?,
                     _ => unreachable!(),
                 }
-                return Ok(());
+                Ok(())
             }
             Some(flag) if flag.starts_with('-') => {
                 self.print_err(format!("history: {flag}: invalid option"))
