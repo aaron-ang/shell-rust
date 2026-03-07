@@ -230,19 +230,21 @@ impl Terminal {
 
     fn handle_tab(&mut self) -> Result<()> {
         let prefix = self.input[..self.cursor_pos].iter().collect::<String>();
+        let completion_token = prefix.split(' ').last().unwrap_or("");
         let matches = match &self.completion {
-            Some(state) if state.prefix == prefix => state.matches.clone(),
+            Some(c) if c.prefix == prefix => c.matches.clone(),
             _ => {
                 if prefix == "." || prefix == ".." {
                     vec![prefix.clone() + "/"]
                 } else {
-                    self.get_completions(&prefix)
+                    self.get_matches(&prefix)
                 }
             }
         };
         match matches.len() {
             0 => write!(self.stdout, "{BELL}")?,
             1 => {
+                // Single match: use full name; trailing / for dirs, trailing space for files
                 let mut completion = matches[0].clone();
                 if !completion.ends_with('/') {
                     completion += " ";
@@ -250,8 +252,9 @@ impl Terminal {
                 self.update_input(&completion)?;
             }
             _ => {
+                // Multiple matches: complete to LCP if it extends the current token
                 let common_prefix = longest_common_prefix(&matches);
-                if common_prefix.len() > prefix.len() {
+                if common_prefix.len() > completion_token.len() {
                     self.update_input(&common_prefix)?;
                 } else {
                     // First TAB: ring bell only.
@@ -268,7 +271,7 @@ impl Terminal {
         Ok(())
     }
 
-    fn get_completions(&self, prefix: &str) -> Vec<String> {
+    fn get_matches(&self, prefix: &str) -> Vec<String> {
         let last_token = prefix.split(" ").last().unwrap_or("");
         // Complete as files if there's a path separator or it's not the first word
         if last_token.contains('/') || prefix.contains(' ') {
