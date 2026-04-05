@@ -45,9 +45,10 @@ impl Jobs {
         self.inner.read().unwrap().len()
     }
 
-    pub fn print<W: Write>(&self, writer: &mut W) -> Result<()> {
+    /// Check for exited jobs, print Done lines, and remove them.
+    pub fn reap<W: Write>(&self, writer: &mut W) -> Result<()> {
         let mut entries = self.inner.write().unwrap();
-        // Reap finished processes
+        // Check for newly finished processes
         for entry in entries.iter_mut() {
             if let Status::Running = entry.status {
                 if entry.child.try_wait()?.is_some() {
@@ -55,14 +56,35 @@ impl Jobs {
                 }
             }
         }
-        // Print all entries
+        // Print and remove done jobs
         let len = entries.len();
         for (i, entry) in entries.iter().enumerate() {
-            let marker = match i {
-                _ if i + 1 == len => '+',
-                _ if i + 2 == len => '-',
-                _ => ' ',
-            };
+            if let Status::Done = entry.status {
+                let marker = marker(i, len);
+                writeln!(
+                    writer,
+                    "[{}]{}  {:<24}{}",
+                    entry.number, marker, "Done", entry.command
+                )?;
+            }
+        }
+        entries.retain(|e| matches!(e.status, Status::Running));
+        Ok(())
+    }
+
+    /// Check statuses, list all jobs in order, then remove Done ones.
+    pub fn print<W: Write>(&self, writer: &mut W) -> Result<()> {
+        let mut entries = self.inner.write().unwrap();
+        for entry in entries.iter_mut() {
+            if let Status::Running = entry.status {
+                if entry.child.try_wait()?.is_some() {
+                    entry.status = Status::Done;
+                }
+            }
+        }
+        let len = entries.len();
+        for (i, entry) in entries.iter().enumerate() {
+            let m = marker(i, len);
             let (status, suffix) = match entry.status {
                 Status::Running => ("Running", " &"),
                 Status::Done => ("Done", ""),
@@ -70,12 +92,19 @@ impl Jobs {
             writeln!(
                 writer,
                 "[{}]{}  {:<24}{}{}",
-                entry.number, marker, status, entry.command, suffix
+                entry.number, m, status, entry.command, suffix
             )?;
         }
-        // Remove done jobs
         entries.retain(|e| matches!(e.status, Status::Running));
         Ok(())
+    }
+}
+
+fn marker(index: usize, len: usize) -> char {
+    match index {
+        _ if index + 1 == len => '+',
+        _ if index + 2 == len => '-',
+        _ => ' ',
     }
 }
 
@@ -85,10 +114,22 @@ mod tests {
     use std::io::Cursor;
     use std::process::Command;
 
-    fn print_jobs(jobs: &Jobs) -> String {
+    fn collect<F: Fn(&Jobs, &mut Cursor<Vec<u8>>)>(jobs: &Jobs, f: F) -> String {
         let mut buf = Cursor::new(Vec::new());
-        jobs.print(&mut buf).unwrap();
+        f(jobs, &mut buf);
         String::from_utf8(buf.into_inner()).unwrap()
+    }
+
+    fn print_jobs(jobs: &Jobs) -> String {
+        collect(jobs, |j, w| {
+            j.print(w).unwrap();
+        })
+    }
+
+    fn reap_jobs(jobs: &Jobs) -> String {
+        collect(jobs, |j, w| {
+            j.reap(w).unwrap();
+        })
     }
 
     #[test]
@@ -105,16 +146,40 @@ mod tests {
         let jobs = Jobs::new();
         let child = Command::new("true").spawn().unwrap();
         jobs.add(child, "true".into());
-        // Wait a moment for the process to exit
         std::thread::sleep(std::time::Duration::from_millis(50));
 
         let output = print_jobs(&jobs);
         assert!(output.contains("Done"));
-        assert!(!output.ends_with("&\n"));
+        assert!(!output.contains("&"));
 
-        // Second call should be empty
         let output = print_jobs(&jobs);
         assert!(output.is_empty());
+    }
+
+    #[test]
+    fn reap_prints_done_and_removes() {
+        let jobs = Jobs::new();
+        let child = Command::new("true").spawn().unwrap();
+        jobs.add(child, "true".into());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let output = reap_jobs(&jobs);
+        assert!(output.contains("Done"));
+
+        // After reap, jobs list is empty
+        let output = print_jobs(&jobs);
+        assert!(output.is_empty());
+    }
+
+    #[test]
+    fn reap_skips_running_jobs() {
+        let jobs = Jobs::new();
+        let child = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child, "sleep 10".into());
+
+        let output = reap_jobs(&jobs);
+        assert!(output.is_empty());
+        assert_eq!(jobs.len(), 1);
     }
 
     #[test]
@@ -129,6 +194,30 @@ mod tests {
         assert!(lines[0].starts_with("[1] "));
         assert!(lines[1].starts_with("[2]-"));
         assert!(lines[2].starts_with("[3]+"));
+    }
+
+    #[test]
+    fn mixed_running_and_done_listed_in_order() {
+        let jobs = Jobs::new();
+        let child1 = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child1, "sleep 10".into());
+        let child2 = Command::new("true").spawn().unwrap();
+        jobs.add(child2, "true".into());
+        let child3 = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child3, "sleep 10".into());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
+        let output = print_jobs(&jobs);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 3);
+        assert!(lines[0].contains("Running"));
+        assert!(lines[1].contains("Done"));
+        assert!(lines[2].contains("Running"));
+
+        // After print, done job is removed
+        let output = print_jobs(&jobs);
+        let lines: Vec<&str> = output.lines().collect();
+        assert_eq!(lines.len(), 2);
     }
 
     #[test]

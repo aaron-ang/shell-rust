@@ -81,6 +81,7 @@ impl Terminal {
                     if should_execute {
                         self.run()?;
                     }
+                    self.reap_jobs()?;
                 }
                 Ok(ProcessResult::Exit) => {
                     println!();
@@ -90,6 +91,13 @@ impl Terminal {
             }
             self.reset_input();
         }
+    }
+
+    fn reap_jobs(&mut self) -> Result<()> {
+        self.stdout.suspend_raw_mode()?;
+        self.shell.jobs.reap(&mut io::stdout())?;
+        self.stdout.activate_raw_mode()?;
+        Ok(())
     }
 
     fn reset_input(&mut self) {
@@ -209,7 +217,8 @@ impl Terminal {
             return Ok(());
         }
         // Save current input to the history
-        self.shell.history
+        self.shell
+            .history
             .set(self.history_index, self.input.iter().collect());
         self.history_index += 1;
         // Set input: either from stored_input (if at end) or from history
