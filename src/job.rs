@@ -1,5 +1,4 @@
 use std::{
-    fmt,
     io::Write,
     sync::{Arc, RwLock},
 };
@@ -11,12 +10,6 @@ struct JobEntry {
     number: usize,
     pid: u32,
     command: String,
-}
-
-impl fmt::Display for JobEntry {
-    fn fmt(&self, f: &mut fmt::Formatter<'_>) -> fmt::Result {
-        write!(f, "[{}]+  {:<24}{} &", self.number, "Running", self.command)
-    }
 }
 
 #[derive(Clone)]
@@ -47,8 +40,18 @@ impl Jobs {
 
     pub fn print<W: Write>(&self, writer: &mut W) -> Result<()> {
         let entries = self.inner.read().unwrap();
-        for entry in entries.iter() {
-            writeln!(writer, "{entry}")?;
+        let len = entries.len();
+        for (i, entry) in entries.iter().enumerate() {
+            let marker = match i {
+                _ if i + 1 == len => '+',
+                _ if i + 2 == len => '-',
+                _ => ' ',
+            };
+            writeln!(
+                writer,
+                "[{}]{}  {:<24}{} &",
+                entry.number, marker, "Running", entry.command
+            )?;
         }
         Ok(())
     }
@@ -59,26 +62,44 @@ mod tests {
     use super::*;
     use std::io::Cursor;
 
-    #[test]
-    fn add_and_print() {
-        let jobs = Jobs::new();
-        jobs.add(1234, "sleep 10".into());
+    fn print_jobs(jobs: &Jobs) -> String {
         let mut buf = Cursor::new(Vec::new());
         jobs.print(&mut buf).unwrap();
-        let output = String::from_utf8(buf.into_inner()).unwrap();
-        assert_eq!(output, "[1]+  Running                 sleep 10 &\n");
+        String::from_utf8(buf.into_inner()).unwrap()
     }
 
     #[test]
-    fn job_numbers_increment() {
+    fn single_job_has_plus_marker() {
         let jobs = Jobs::new();
-        jobs.add(100, "sleep 1".into());
-        jobs.add(200, "sleep 2".into());
-        let mut buf = Cursor::new(Vec::new());
-        jobs.print(&mut buf).unwrap();
-        let output = String::from_utf8(buf.into_inner()).unwrap();
-        assert!(output.starts_with("[1]+"));
-        assert!(output.contains("[2]+"));
+        jobs.add(1234, "sleep 10".into());
+        assert_eq!(
+            print_jobs(&jobs),
+            "[1]+  Running                 sleep 10 &\n"
+        );
+    }
+
+    #[test]
+    fn two_jobs_markers() {
+        let jobs = Jobs::new();
+        jobs.add(100, "sleep 10".into());
+        jobs.add(200, "sleep 20".into());
+        let output = print_jobs(&jobs);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines[0].starts_with("[1]-"));
+        assert!(lines[1].starts_with("[2]+"));
+    }
+
+    #[test]
+    fn three_jobs_markers() {
+        let jobs = Jobs::new();
+        jobs.add(100, "sleep 10".into());
+        jobs.add(200, "sleep 20".into());
+        jobs.add(300, "sleep 30".into());
+        let output = print_jobs(&jobs);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines[0].starts_with("[1] "));
+        assert!(lines[1].starts_with("[2]-"));
+        assert!(lines[2].starts_with("[3]+"));
     }
 
     #[test]
