@@ -30,6 +30,7 @@ pub struct Command {
     args: Vec<String>,
     output: Box<dyn Write>,
     err: Box<dyn Write>,
+    redirected: bool,
     history: History,
 }
 
@@ -40,6 +41,7 @@ impl Command {
             args: Vec::new(),
             output: Box::new(io::stdout()),
             err: Box::new(io::stderr()),
+            redirected: false,
             history,
         }
     }
@@ -54,10 +56,12 @@ impl Command {
 
     pub fn set_output(&mut self, output: impl Write + 'static) {
         self.output = Box::new(output);
+        self.redirected = true;
     }
 
     pub fn set_err(&mut self, err: impl Write + 'static) {
         self.err = Box::new(err);
+        self.redirected = true;
     }
 
     pub fn is_empty(&self) -> bool {
@@ -100,8 +104,10 @@ impl Command {
 
     pub fn execute_to_output(&mut self, out: impl Write + 'static) -> Result<()> {
         let orig_out = mem::replace(&mut self.output, Box::new(out));
+        self.redirected = true;
         self.execute()?;
         self.output = orig_out;
+        self.redirected = false;
         Ok(())
     }
 
@@ -180,14 +186,22 @@ impl Command {
 
     fn execute_external_command(&mut self) -> Result<()> {
         if self.exists() {
-            let mut process = process::Command::new(&self.name);
-            match process.args(&self.args).output() {
-                Ok(output) => {
-                    self.output.write_all(&output.stdout)?;
-                    self.err.write_all(&output.stderr)?;
-                    Ok(())
+            let mut cmd = process::Command::new(&self.name);
+            cmd.args(&self.args);
+            if self.redirected {
+                match cmd.output() {
+                    Ok(output) => {
+                        self.output.write_all(&output.stdout)?;
+                        self.err.write_all(&output.stderr)?;
+                        Ok(())
+                    }
+                    Err(e) => self.print_err(e),
                 }
-                Err(e) => self.print_err(e),
+            } else {
+                match cmd.status() {
+                    Ok(_) => Ok(()),
+                    Err(e) => self.print_err(e),
+                }
             }
         } else {
             self.print_err(format!("{}: command not found", self.name))
