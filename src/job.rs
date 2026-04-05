@@ -1,15 +1,21 @@
 use std::{
     io::Write,
+    process::Child,
     sync::{Arc, RwLock},
 };
 
 use anyhow::Result;
 
-#[allow(dead_code)]
+enum Status {
+    Running,
+    Done,
+}
+
 struct JobEntry {
     number: usize,
-    pid: u32,
+    child: Child,
     command: String,
+    status: Status,
 }
 
 #[derive(Clone)]
@@ -24,13 +30,14 @@ impl Jobs {
         }
     }
 
-    pub fn add(&self, pid: u32, command: String) {
+    pub fn add(&self, child: Child, command: String) {
         let mut entries = self.inner.write().unwrap();
         let number = entries.last().map_or(1, |e| e.number + 1);
         entries.push(JobEntry {
             number,
-            pid,
+            child,
             command,
+            status: Status::Running,
         });
     }
 
@@ -39,7 +46,16 @@ impl Jobs {
     }
 
     pub fn print<W: Write>(&self, writer: &mut W) -> Result<()> {
-        let entries = self.inner.read().unwrap();
+        let mut entries = self.inner.write().unwrap();
+        // Reap finished processes
+        for entry in entries.iter_mut() {
+            if let Status::Running = entry.status {
+                if entry.child.try_wait()?.is_some() {
+                    entry.status = Status::Done;
+                }
+            }
+        }
+        // Print all entries
         let len = entries.len();
         for (i, entry) in entries.iter().enumerate() {
             let marker = match i {
@@ -47,12 +63,18 @@ impl Jobs {
                 _ if i + 2 == len => '-',
                 _ => ' ',
             };
+            let (status, suffix) = match entry.status {
+                Status::Running => ("Running", " &"),
+                Status::Done => ("Done", ""),
+            };
             writeln!(
                 writer,
-                "[{}]{}  {:<24}{} &",
-                entry.number, marker, "Running", entry.command
+                "[{}]{}  {:<24}{}{}",
+                entry.number, marker, status, entry.command, suffix
             )?;
         }
+        // Remove done jobs
+        entries.retain(|e| matches!(e.status, Status::Running));
         Ok(())
     }
 }
@@ -61,6 +83,7 @@ impl Jobs {
 mod tests {
     use super::*;
     use std::io::Cursor;
+    use std::process::Command;
 
     fn print_jobs(jobs: &Jobs) -> String {
         let mut buf = Cursor::new(Vec::new());
@@ -69,32 +92,38 @@ mod tests {
     }
 
     #[test]
-    fn single_job_has_plus_marker() {
+    fn single_running_job() {
         let jobs = Jobs::new();
-        jobs.add(1234, "sleep 10".into());
-        assert_eq!(
-            print_jobs(&jobs),
-            "[1]+  Running                 sleep 10 &\n"
-        );
+        let child = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child, "sleep 10".into());
+        let output = print_jobs(&jobs);
+        assert_eq!(output, "[1]+  Running                 sleep 10 &\n");
     }
 
     #[test]
-    fn two_jobs_markers() {
+    fn done_job_shown_then_removed() {
         let jobs = Jobs::new();
-        jobs.add(100, "sleep 10".into());
-        jobs.add(200, "sleep 20".into());
+        let child = Command::new("true").spawn().unwrap();
+        jobs.add(child, "true".into());
+        // Wait a moment for the process to exit
+        std::thread::sleep(std::time::Duration::from_millis(50));
+
         let output = print_jobs(&jobs);
-        let lines: Vec<&str> = output.lines().collect();
-        assert!(lines[0].starts_with("[1]-"));
-        assert!(lines[1].starts_with("[2]+"));
+        assert!(output.contains("Done"));
+        assert!(!output.ends_with("&\n"));
+
+        // Second call should be empty
+        let output = print_jobs(&jobs);
+        assert!(output.is_empty());
     }
 
     #[test]
     fn three_jobs_markers() {
         let jobs = Jobs::new();
-        jobs.add(100, "sleep 10".into());
-        jobs.add(200, "sleep 20".into());
-        jobs.add(300, "sleep 30".into());
+        for _ in 0..3 {
+            let child = Command::new("sleep").arg("10").spawn().unwrap();
+            jobs.add(child, "sleep 10".into());
+        }
         let output = print_jobs(&jobs);
         let lines: Vec<&str> = output.lines().collect();
         assert!(lines[0].starts_with("[1] "));
@@ -105,9 +134,7 @@ mod tests {
     #[test]
     fn empty_jobs_no_output() {
         let jobs = Jobs::new();
-        let mut buf = Cursor::new(Vec::new());
-        jobs.print(&mut buf).unwrap();
-        let output = String::from_utf8(buf.into_inner()).unwrap();
+        let output = print_jobs(&jobs);
         assert!(output.is_empty());
     }
 }
