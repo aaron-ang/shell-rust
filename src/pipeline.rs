@@ -125,8 +125,7 @@ impl Pipeline {
             let child = cmd.new_process().spawn()?;
             let pid = child.id();
             let command = self.input.trim().trim_end_matches('&').trim().to_string();
-            self.shell.jobs.add(child, command);
-            let number = self.shell.jobs.len();
+            let number = self.shell.jobs.add(child, command);
             println!("[{number}] {pid}");
         }
         Ok(())

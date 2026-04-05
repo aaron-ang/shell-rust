@@ -30,19 +30,24 @@ impl Jobs {
         }
     }
 
-    pub fn add(&self, child: Child, command: String) {
+    pub fn add(&self, child: Child, command: String) -> usize {
         let mut entries = self.inner.write().unwrap();
-        let number = entries.last().map_or(1, |e| e.number + 1);
-        entries.push(JobEntry {
-            number,
-            child,
-            command,
-            status: Status::Running,
-        });
-    }
-
-    pub fn len(&self) -> usize {
-        self.inner.read().unwrap().len()
+        let pos = entries
+            .iter()
+            .enumerate()
+            .position(|(i, e)| e.number != i + 1)
+            .unwrap_or(entries.len());
+        let number = pos + 1;
+        entries.insert(
+            pos,
+            JobEntry {
+                number,
+                child,
+                command,
+                status: Status::Running,
+            },
+        );
+        number
     }
 
     /// Check for exited jobs, print Done lines, and remove them.
@@ -179,7 +184,8 @@ mod tests {
 
         let output = reap_jobs(&jobs);
         assert!(output.is_empty());
-        assert_eq!(jobs.len(), 1);
+        let len = jobs.inner.read().unwrap().len();
+        assert_eq!(len, 1);
     }
 
     #[test]
@@ -218,6 +224,45 @@ mod tests {
         let output = print_jobs(&jobs);
         let lines: Vec<&str> = output.lines().collect();
         assert_eq!(lines.len(), 2);
+    }
+
+    #[test]
+    fn recycles_to_one_when_empty() {
+        let jobs = Jobs::new();
+        let child = Command::new("true").spawn().unwrap();
+        jobs.add(child, "true".into());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        reap_jobs(&jobs);
+
+        // Table is empty, next job should get [1]
+        let child = Command::new("sleep").arg("10").spawn().unwrap();
+        let number = jobs.add(child, "sleep 10".into());
+        assert_eq!(number, 1);
+    }
+
+    #[test]
+    fn recycles_gap_in_middle() {
+        let jobs = Jobs::new();
+        let child1 = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child1, "sleep 10".into());
+        let child2 = Command::new("true").spawn().unwrap();
+        jobs.add(child2, "true".into());
+        let child3 = Command::new("sleep").arg("10").spawn().unwrap();
+        jobs.add(child3, "sleep 10".into());
+        std::thread::sleep(std::time::Duration::from_millis(50));
+        reap_jobs(&jobs); // removes job [2]
+
+        // Job [1] and [3] remain, next should get [2]
+        let child = Command::new("sleep").arg("10").spawn().unwrap();
+        let number = jobs.add(child, "sleep 10".into());
+        assert_eq!(number, 2);
+
+        // Jobs should be in order: [1], [2], [3]
+        let output = print_jobs(&jobs);
+        let lines: Vec<&str> = output.lines().collect();
+        assert!(lines[0].starts_with("[1]"));
+        assert!(lines[1].starts_with("[2]"));
+        assert!(lines[2].starts_with("[3]"));
     }
 
     #[test]
