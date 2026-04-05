@@ -11,7 +11,7 @@ use anyhow::Result;
 use is_executable::IsExecutable;
 use strum::{Display, EnumIter, EnumString};
 
-use crate::history::History;
+use crate::shell::Shell;
 
 #[derive(EnumIter, EnumString, Display)]
 #[strum(ascii_case_insensitive)]
@@ -31,18 +31,18 @@ pub struct Command {
     output: Box<dyn Write>,
     err: Box<dyn Write>,
     redirected: bool,
-    history: History,
+    shell: Shell,
 }
 
 impl Command {
-    pub fn new(history: History) -> Self {
+    pub fn new(shell: Shell) -> Self {
         Self {
             name: String::new(),
             args: Vec::new(),
             output: Box::new(io::stdout()),
             err: Box::new(io::stderr()),
             redirected: false,
-            history,
+            shell,
         }
     }
 
@@ -94,7 +94,7 @@ impl Command {
                 Builtin::Echo => self.handle_echo(),
                 Builtin::Exit => self.handle_exit(),
                 Builtin::History => self.handle_history(),
-                Builtin::Jobs => Ok(()),
+                Builtin::Jobs => self.shell.jobs.print(&mut self.output),
                 Builtin::Pwd => self.print_out(env::current_dir()?.display()),
                 Builtin::Type => self.handle_type(),
             },
@@ -133,24 +133,24 @@ impl Command {
             .first()
             .and_then(|s| s.parse().ok())
             .unwrap_or_default();
-        let _ = self.history.save();
+        let _ = self.shell.history.save();
         process::exit(status);
     }
 
     fn handle_history(&mut self) -> Result<()> {
         let mut args = self.args.iter().map(String::as_str);
         match args.next() {
-            None => self.history.print(&mut self.output, None),
+            None => self.shell.history.print(&mut self.output, None),
             Some("-c") => {
-                self.history.clear();
+                self.shell.history.clear();
                 Ok(())
             }
             Some(opt @ ("-r" | "-w" | "-a")) => {
                 let file = args.next().map(PathBuf::from).unwrap_or_default();
                 match opt {
-                    "-r" => self.history.append_from_file(file),
-                    "-w" => self.history.write_to_file(file)?,
-                    "-a" => self.history.append_to_file(file)?,
+                    "-r" => self.shell.history.append_from_file(file),
+                    "-w" => self.shell.history.write_to_file(file)?,
+                    "-a" => self.shell.history.append_to_file(file)?,
                     _ => unreachable!(),
                 }
                 Ok(())
@@ -160,7 +160,7 @@ impl Command {
             }
             Some(arg) => {
                 if let Ok(n) = arg.parse::<usize>() {
-                    self.history.print(&mut self.output, Some(n))
+                    self.shell.history.print(&mut self.output, Some(n))
                 } else {
                     self.print_err(format!("history: {arg}: numeric argument required"))
                 }
@@ -235,10 +235,8 @@ impl Command {
 #[cfg(test)]
 mod tests {
     use super::*;
-    use crate::history::History;
-
     fn cmd(args: &[&str]) -> Command {
-        let mut c = Command::new(History::open());
+        let mut c = Command::new(Shell::new());
         for a in args {
             c.push_arg(a);
         }
@@ -254,7 +252,7 @@ mod tests {
 
     #[test]
     fn is_empty_when_no_args() {
-        let c = Command::new(History::open());
+        let c = Command::new(Shell::new());
         assert!(c.is_empty());
     }
 

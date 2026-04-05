@@ -13,8 +13,8 @@ use termion::{
 };
 
 use crate::command::Builtin;
-use crate::history::History;
 use crate::pipeline::Pipeline;
+use crate::shell::Shell;
 
 const BELL: &str = "\x07";
 
@@ -41,8 +41,8 @@ pub struct Terminal {
     cursor_pos: usize,
     /// Raw terminal output for direct terminal manipulation
     stdout: RawTerminal<io::Stdout>,
-    /// History of previously entered commands
-    history: History,
+    /// Shared shell state (history, jobs)
+    shell: Shell,
     /// Current index in the command history
     history_index: usize,
     /// Last command entered before navigating history
@@ -53,19 +53,19 @@ pub struct Terminal {
 
 impl Drop for Terminal {
     fn drop(&mut self) {
-        let _ = self.history.save();
+        let _ = self.shell.history.save();
     }
 }
 
 impl Terminal {
     pub fn new() -> Result<Self> {
-        let history = History::open();
-        let history_len = history.len();
+        let shell = Shell::new();
+        let history_len = shell.history.len();
         let term = Self {
             input: Vec::new(),
             cursor_pos: 0,
             stdout: io::stdout().into_raw_mode()?,
-            history,
+            shell,
             history_index: history_len,
             last_input: String::new(),
             completion: None,
@@ -174,13 +174,13 @@ impl Terminal {
 
     fn append_history(&mut self) {
         let command = self.input.iter().collect::<String>();
-        self.history.add(command);
-        self.history_index = self.history.len();
+        self.shell.history.add(command);
+        self.history_index = self.shell.history.len();
     }
 
     fn get_previous_command(&mut self) -> Result<()> {
         // Can't go back if we're at the beginning of history or history is empty
-        let history_len = self.history.len();
+        let history_len = self.shell.history.len();
         if history_len == 0 || self.history_index == 0 {
             write!(self.stdout, "{BELL}")?;
             return Ok(());
@@ -190,11 +190,11 @@ impl Terminal {
         if self.history_index == history_len {
             self.last_input = input;
         } else {
-            self.history.set(self.history_index, input);
+            self.shell.history.set(self.history_index, input);
         }
         // Move to previous command
         self.history_index -= 1;
-        if let Some(cmd) = self.history.get(self.history_index) {
+        if let Some(cmd) = self.shell.history.get(self.history_index) {
             self.input = cmd.chars().collect();
             self.cursor_pos = self.input.len();
         }
@@ -203,19 +203,19 @@ impl Terminal {
 
     fn get_next_command(&mut self) -> Result<()> {
         // Check if we're already at or beyond the end of history
-        let history_len = self.history.len();
+        let history_len = self.shell.history.len();
         if self.history_index >= history_len {
             write!(self.stdout, "{BELL}")?;
             return Ok(());
         }
         // Save current input to the history
-        self.history
+        self.shell.history
             .set(self.history_index, self.input.iter().collect());
         self.history_index += 1;
         // Set input: either from stored_input (if at end) or from history
         if self.history_index == history_len {
             self.input = self.last_input.chars().collect();
-        } else if let Some(cmd) = self.history.get(self.history_index) {
+        } else if let Some(cmd) = self.shell.history.get(self.history_index) {
             self.input = cmd.chars().collect();
         }
         // Update cursor position and redraw
@@ -323,7 +323,7 @@ impl Terminal {
     fn run(&self) -> Result<()> {
         self.stdout.suspend_raw_mode()?;
         let input = self.input.iter().collect::<String>();
-        match Pipeline::new(&input, self.history.clone()) {
+        match Pipeline::new(&input, self.shell.clone()) {
             Ok(mut pipeline) => pipeline.execute()?,
             Err(e) => {
                 eprintln!("{e}");

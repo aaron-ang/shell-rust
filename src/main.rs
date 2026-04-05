@@ -2,7 +2,9 @@ use anyhow::Result;
 
 mod command;
 mod history;
+mod job;
 mod pipeline;
+mod shell;
 mod state;
 mod token;
 use state::Terminal;

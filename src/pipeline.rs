@@ -4,21 +4,23 @@ use anyhow::{anyhow, Result};
 use os_pipe::pipe;
 
 use crate::command::Command;
-use crate::history::History;
+use crate::shell::Shell;
 use crate::token::{tokenize, RedirectType, Token};
 
 pub struct Pipeline {
     commands: Vec<Command>,
-    history: History,
+    shell: Shell,
     background: bool,
+    input: String,
 }
 
 impl Pipeline {
-    pub fn new(input: &str, history: History) -> Result<Self> {
+    pub fn new(input: &str, shell: Shell) -> Result<Self> {
         let mut pipeline = Self {
             commands: Vec::new(),
-            history,
+            shell,
             background: false,
+            input: input.to_string(),
         };
         let tokens = tokenize(input)?;
         pipeline.parse_tokens(tokens)?;
@@ -26,7 +28,7 @@ impl Pipeline {
     }
 
     fn parse_tokens(&mut self, tokens: Vec<Token>) -> Result<()> {
-        let mut cmd = Command::new(self.history.clone());
+        let mut cmd = Command::new(self.shell.clone());
         for token in tokens {
             match token {
                 Token::Arg(arg) => cmd.push_arg(&arg),
@@ -35,7 +37,7 @@ impl Pipeline {
                         return Err(anyhow!("Empty command before pipe"));
                     }
                     self.commands.push(cmd);
-                    cmd = Command::new(self.history.clone());
+                    cmd = Command::new(self.shell.clone());
                 }
                 Token::Redirect {
                     type_,
@@ -119,10 +121,15 @@ impl Pipeline {
     }
 
     fn execute_background(&mut self) -> Result<()> {
-        // For now, only handle single-command background jobs
         if let Some(cmd) = self.commands.first() {
             let child = cmd.new_process().spawn()?;
-            println!("[1] {}", child.id());
+            let pid = child.id();
+            self.shell.jobs.add(
+                pid,
+                self.input.trim().trim_end_matches('&').trim().to_string(),
+            );
+            let number = self.shell.jobs.len();
+            println!("[{number}] {pid}");
         }
         Ok(())
     }
@@ -132,47 +139,47 @@ impl Pipeline {
 mod tests {
     use super::*;
 
-    fn history() -> History {
-        History::open()
+    fn pipeline(input: &str) -> Pipeline {
+        Pipeline::new(input, Shell::new()).unwrap()
     }
 
     #[test]
     fn single_command() {
-        let p = Pipeline::new("echo hello world", history()).unwrap();
+        let p = pipeline("echo hello world");
         assert_eq!(p.commands.len(), 1);
         assert!(!p.background);
     }
 
     #[test]
     fn background_flag_set() {
-        let p = Pipeline::new("sleep 500 &", history()).unwrap();
+        let p = pipeline("sleep 500 &");
         assert!(p.background);
         assert_eq!(p.commands.len(), 1);
     }
 
     #[test]
     fn ampersand_not_last_is_not_background() {
-        let p = Pipeline::new("echo & hello", history()).unwrap();
+        let p = pipeline("echo & hello");
         assert!(!p.background);
     }
 
     #[test]
     fn pipe_creates_multiple_commands() {
-        let p = Pipeline::new("echo hi | cat", history()).unwrap();
+        let p = pipeline("echo hi | cat");
         assert_eq!(p.commands.len(), 2);
         assert!(!p.background);
     }
 
     #[test]
     fn empty_input() {
-        let p = Pipeline::new("", history()).unwrap();
+        let p = pipeline("");
         assert_eq!(p.commands.len(), 0);
         assert!(!p.background);
     }
 
     #[test]
     fn bare_ampersand_only() {
-        let p = Pipeline::new("&", history()).unwrap();
+        let p = pipeline("&");
         assert!(!p.background);
         assert_eq!(p.commands.len(), 1);
     }
