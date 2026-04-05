@@ -20,6 +20,7 @@ pub enum Builtin {
     Echo,
     Exit,
     History,
+    Jobs,
     Pwd,
     Type,
 }
@@ -67,6 +68,15 @@ impl Command {
         Builtin::try_from(self.name.as_str()).is_ok()
     }
 
+    pub fn pop_background_token(&mut self) -> bool {
+        if self.args.last().is_some_and(|a| a == "&") {
+            self.args.pop();
+            true
+        } else {
+            false
+        }
+    }
+
     pub fn new_process(&self) -> process::Command {
         let mut cmd = process::Command::new(&self.name);
         cmd.args(&self.args);
@@ -80,6 +90,7 @@ impl Command {
                 Builtin::Echo => self.handle_echo(),
                 Builtin::Exit => self.handle_exit(),
                 Builtin::History => self.handle_history(),
+                Builtin::Jobs => Ok(()),
                 Builtin::Pwd => self.print_out(env::current_dir()?.display()),
                 Builtin::Type => self.handle_type(),
             },
@@ -127,7 +138,7 @@ impl Command {
             Some("-c") => {
                 self.history.clear();
                 Ok(())
-            },
+            }
             Some(opt @ ("-r" | "-w" | "-a")) => {
                 let file = args.next().map(PathBuf::from).unwrap_or_default();
                 match opt {
@@ -157,9 +168,9 @@ impl Command {
                 Ok(_) => self.print_out(format!("{cmd} is a shell builtin"))?,
                 Err(_) => {
                     if let Some(path) = Self::full_path(cmd) {
-                        self.print_out(format!("{cmd} is {}", path.display()))?
+                        self.print_out(format!("{cmd} is {}", path.display()))?;
                     } else {
-                        self.print_out(format!("{cmd}: not found"))?
+                        self.print_out(format!("{cmd}: not found"))?;
                     }
                 }
             }
@@ -204,5 +215,66 @@ impl Command {
     fn print_err(&mut self, msg: impl Display) -> Result<()> {
         writeln!(self.err, "{msg}")?;
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use crate::history::History;
+
+    fn cmd(args: &[&str]) -> Command {
+        let mut c = Command::new(History::open());
+        for a in args {
+            c.push_arg(a);
+        }
+        c
+    }
+
+    #[test]
+    fn push_arg_sets_name_then_args() {
+        let c = cmd(&["echo", "hello", "world"]);
+        assert_eq!(c.name, "echo");
+        assert_eq!(c.args, &["hello", "world"]);
+    }
+
+    #[test]
+    fn is_empty_when_no_args() {
+        let c = Command::new(History::open());
+        assert!(c.is_empty());
+    }
+
+    #[test]
+    fn is_builtin_matches() {
+        let c = cmd(&["echo"]);
+        assert!(c.is_builtin());
+    }
+
+    #[test]
+    fn is_builtin_rejects_unknown() {
+        let c = cmd(&["foobar"]);
+        assert!(!c.is_builtin());
+    }
+
+    #[test]
+    fn pop_background_token_removes_trailing_ampersand() {
+        let mut c = cmd(&["sleep", "500", "&"]);
+        assert!(c.pop_background_token());
+        assert_eq!(c.name, "sleep");
+        assert_eq!(c.args, &["500"]);
+    }
+
+    #[test]
+    fn pop_background_token_no_ampersand() {
+        let mut c = cmd(&["sleep", "500"]);
+        assert!(!c.pop_background_token());
+        assert_eq!(c.args, &["500"]);
+    }
+
+    #[test]
+    fn pop_background_token_ampersand_not_last() {
+        let mut c = cmd(&["echo", "&", "hello"]);
+        assert!(!c.pop_background_token());
+        assert_eq!(c.args, &["&", "hello"]);
     }
 }

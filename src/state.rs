@@ -105,6 +105,7 @@ impl Terminal {
         // Reposition cursor to just after the inserted char
         let n = self.input.len().saturating_sub(self.cursor_pos);
         if n > 0 {
+            #[allow(clippy::cast_possible_truncation)]
             write!(self.stdout, "{}", cursor::Left(n as u16))?;
         }
         self.stdout.flush()?;
@@ -138,7 +139,7 @@ impl Terminal {
                 Key::Down => self.get_next_command()?,
                 Key::Char(c) => self.insert_char(c)?,
                 _ => (),
-            };
+            }
             self.stdout.flush()?;
         }
         Ok(ProcessResult::Continue(true))
@@ -230,7 +231,7 @@ impl Terminal {
 
     fn handle_tab(&mut self) -> Result<()> {
         let prefix = self.input[..self.cursor_pos].iter().collect::<String>();
-        let completion_token = prefix.split(' ').last().unwrap_or("");
+        let completion_token = prefix.split(' ').next_back().unwrap_or("");
         let matches = match &self.completion {
             Some(c) if c.prefix == prefix => c.matches.clone(),
             _ => {
@@ -260,7 +261,7 @@ impl Terminal {
                     // First TAB: ring bell only.
                     // Second TAB (cached): ring bell and show list.
                     let was_cached = self.completion.as_ref().is_some_and(|s| s.prefix == prefix);
-                    self.completion = Some(Completion::new(prefix.to_string(), matches.clone()));
+                    self.completion = Some(Completion::new(prefix.clone(), matches.clone()));
                     write!(self.stdout, "{BELL}")?;
                     if was_cached {
                         self.display_matches(&matches)?;
@@ -271,8 +272,9 @@ impl Terminal {
         Ok(())
     }
 
+    #[allow(clippy::unused_self)]
     fn get_matches(&self, prefix: &str) -> Vec<String> {
-        let last_token = prefix.split(" ").last().unwrap_or("");
+        let last_token = prefix.split(' ').next_back().unwrap_or("");
         // Complete as files if there's a path separator or it's not the first word
         if last_token.contains('/') || prefix.contains(' ') {
             find_matching_files(last_token)
@@ -326,7 +328,7 @@ impl Terminal {
             Err(e) => {
                 eprintln!("{e}");
             }
-        };
+        }
         self.stdout.activate_raw_mode()?;
         Ok(())
     }
@@ -376,7 +378,7 @@ fn find_matching_files(prefix: &str) -> Vec<String> {
                 if name.starts_with(stem) {
                     let mut candidate = name.to_string();
                     // Add trailing slash if it's a directory
-                    if entry.file_type().map(|ft| ft.is_dir()).unwrap_or(false) {
+                    if entry.file_type().is_ok_and(|ft| ft.is_dir()) {
                         candidate.push('/');
                     }
                     matches.push(candidate);
@@ -400,4 +402,39 @@ fn longest_common_prefix(strings: &[String]) -> String {
         .take_while(|(a, b)| a == b)
         .map(|(a, _)| a)
         .collect()
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    #[test]
+    fn lcp_common_prefix() {
+        let input = vec!["apple".into(), "application".into(), "apply".into()];
+        assert_eq!(longest_common_prefix(&input), "appl");
+    }
+
+    #[test]
+    fn lcp_identical_strings() {
+        let input = vec!["same".into(), "same".into()];
+        assert_eq!(longest_common_prefix(&input), "same");
+    }
+
+    #[test]
+    fn lcp_no_common_prefix() {
+        let input = vec!["abc".into(), "xyz".into()];
+        assert_eq!(longest_common_prefix(&input), "");
+    }
+
+    #[test]
+    fn lcp_empty_input() {
+        let input: Vec<String> = vec![];
+        assert_eq!(longest_common_prefix(&input), "");
+    }
+
+    #[test]
+    fn lcp_single_string() {
+        let input = vec!["only".into()];
+        assert_eq!(longest_common_prefix(&input), "only");
+    }
 }

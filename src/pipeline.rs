@@ -10,6 +10,7 @@ use crate::token::{tokenize, RedirectType, Token};
 pub struct Pipeline {
     commands: Vec<Command>,
     history: History,
+    background: bool,
 }
 
 impl Pipeline {
@@ -17,6 +18,7 @@ impl Pipeline {
         let mut pipeline = Self {
             commands: Vec::new(),
             history,
+            background: false,
         };
         let tokens = tokenize(input)?;
         pipeline.parse_tokens(tokens)?;
@@ -53,6 +55,9 @@ impl Pipeline {
                 }
             }
         }
+        if cmd.pop_background_token() {
+            self.background = true;
+        }
         if !cmd.is_empty() {
             self.commands.push(cmd);
         }
@@ -62,6 +67,9 @@ impl Pipeline {
     pub fn execute(&mut self) -> Result<()> {
         if self.commands.is_empty() {
             return Ok(());
+        }
+        if self.background {
+            return self.execute_background();
         }
         if self.commands.len() == 1 {
             return self.commands[0].execute();
@@ -74,11 +82,11 @@ impl Pipeline {
         for (i, cmd) in self.commands.iter_mut().enumerate() {
             let is_last = i == last_idx;
             // Prepare a pipe for this stage if not last
-            let (next_reader, next_writer) = if !is_last {
+            let (next_reader, next_writer) = if is_last {
+                (None, None)
+            } else {
                 let (r, w) = pipe()?;
                 (Some(r), Some(w))
-            } else {
-                (None, None)
             };
             if cmd.is_builtin() {
                 // Builtin: execute directly, redirect stdout if needed
@@ -108,6 +116,65 @@ impl Pipeline {
         }
 
         Ok(())
+    }
+
+    fn execute_background(&mut self) -> Result<()> {
+        // For now, only handle single-command background jobs
+        if let Some(cmd) = self.commands.first() {
+            let child = cmd.new_process().spawn()?;
+            println!("[1] {}", child.id());
+        }
+        Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+
+    fn history() -> History {
+        History::open()
+    }
+
+    #[test]
+    fn single_command() {
+        let p = Pipeline::new("echo hello world", history()).unwrap();
+        assert_eq!(p.commands.len(), 1);
+        assert!(!p.background);
+    }
+
+    #[test]
+    fn background_flag_set() {
+        let p = Pipeline::new("sleep 500 &", history()).unwrap();
+        assert!(p.background);
+        assert_eq!(p.commands.len(), 1);
+    }
+
+    #[test]
+    fn ampersand_not_last_is_not_background() {
+        let p = Pipeline::new("echo & hello", history()).unwrap();
+        assert!(!p.background);
+    }
+
+    #[test]
+    fn pipe_creates_multiple_commands() {
+        let p = Pipeline::new("echo hi | cat", history()).unwrap();
+        assert_eq!(p.commands.len(), 2);
+        assert!(!p.background);
+    }
+
+    #[test]
+    fn empty_input() {
+        let p = Pipeline::new("", history()).unwrap();
+        assert_eq!(p.commands.len(), 0);
+        assert!(!p.background);
+    }
+
+    #[test]
+    fn bare_ampersand_only() {
+        let p = Pipeline::new("&", history()).unwrap();
+        assert!(!p.background);
+        assert_eq!(p.commands.len(), 1);
     }
 }
 

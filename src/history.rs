@@ -89,7 +89,7 @@ impl History {
         let file = File::create(path)?;
         let mut writer = BufWriter::new(file);
         for entry in &self.inner.read().unwrap().entries {
-            writeln!(writer, "{}", entry)?;
+            writeln!(writer, "{entry}")?;
         }
         writer.flush()?;
         Ok(())
@@ -103,10 +103,135 @@ impl History {
             .open(path)?;
         let mut writer = BufWriter::new(file);
         for entry in data.entries.iter().skip(data.append_index) {
-            writeln!(writer, "{}", entry)?;
+            writeln!(writer, "{entry}")?;
         }
         writer.flush()?;
         data.append_index = data.entries.len();
         Ok(())
+    }
+}
+
+#[cfg(test)]
+mod tests {
+    use super::*;
+    use std::io::Cursor;
+    use tempfile::NamedTempFile;
+
+    fn empty_history() -> History {
+        History {
+            inner: Arc::new(RwLock::new(HistoryData {
+                entries: Vec::new(),
+                append_index: 0,
+            })),
+        }
+    }
+
+    #[test]
+    fn add_and_get() {
+        let mut h = empty_history();
+        h.add("ls".into());
+        h.add("pwd".into());
+        assert_eq!(h.len(), 2);
+        assert_eq!(h.get(0).unwrap(), "ls");
+        assert_eq!(h.get(1).unwrap(), "pwd");
+    }
+
+    #[test]
+    fn add_ignores_empty() {
+        let mut h = empty_history();
+        h.add(String::new());
+        assert_eq!(h.len(), 0);
+    }
+
+    #[test]
+    fn get_out_of_bounds() {
+        let h = empty_history();
+        assert!(h.get(0).is_none());
+    }
+
+    #[test]
+    fn set_updates_entry() {
+        let mut h = empty_history();
+        h.add("old".into());
+        h.set(0, "new".into());
+        assert_eq!(h.get(0).unwrap(), "new");
+    }
+
+    #[test]
+    fn set_out_of_bounds_is_noop() {
+        let mut h = empty_history();
+        h.set(5, "nope".into());
+        assert_eq!(h.len(), 0);
+    }
+
+    #[test]
+    fn clear_removes_all() {
+        let mut h = empty_history();
+        h.add("a".into());
+        h.add("b".into());
+        h.clear();
+        assert_eq!(h.len(), 0);
+    }
+
+    #[test]
+    fn print_all() {
+        let mut h = empty_history();
+        h.add("first".into());
+        h.add("second".into());
+        let mut buf = Cursor::new(Vec::new());
+        h.print(&mut buf, None).unwrap();
+        let output = String::from_utf8(buf.into_inner()).unwrap();
+        assert_eq!(output, "    1 first\n    2 second\n");
+    }
+
+    #[test]
+    fn print_with_limit() {
+        let mut h = empty_history();
+        h.add("a".into());
+        h.add("b".into());
+        h.add("c".into());
+        let mut buf = Cursor::new(Vec::new());
+        h.print(&mut buf, Some(2)).unwrap();
+        let output = String::from_utf8(buf.into_inner()).unwrap();
+        assert_eq!(output, "    2 b\n    3 c\n");
+    }
+
+    #[test]
+    fn write_and_read_file() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut h = empty_history();
+        h.add("cmd1".into());
+        h.add("cmd2".into());
+        h.write_to_file(tmp.path()).unwrap();
+
+        let contents = fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(contents, "cmd1\ncmd2\n");
+    }
+
+    #[test]
+    fn append_to_file_only_appends_new() {
+        let tmp = NamedTempFile::new().unwrap();
+        let mut h = empty_history();
+        h.add("first".into());
+        h.append_to_file(tmp.path()).unwrap();
+
+        h.add("second".into());
+        h.append_to_file(tmp.path()).unwrap();
+
+        let contents = fs::read_to_string(tmp.path()).unwrap();
+        assert_eq!(contents, "first\nsecond\n");
+    }
+
+    #[test]
+    fn append_from_file_extends_entries() {
+        let tmp = NamedTempFile::new().unwrap();
+        fs::write(tmp.path(), "x\ny\n").unwrap();
+
+        let mut h = empty_history();
+        h.add("existing".into());
+        h.append_from_file(tmp.path());
+        assert_eq!(h.len(), 3);
+        assert_eq!(h.get(1).unwrap(), "x");
+        assert_eq!(h.get(2).unwrap(), "y");
     }
 }

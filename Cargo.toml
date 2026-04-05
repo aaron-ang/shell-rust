@@ -26,3 +26,6 @@ os_pipe = "1.2.3"
 strum = { version = "0.28.0", features = ["derive"] }
 termion = "4.0.6"
 thiserror = "2.0.18"                                  # error handling
+
+[dev-dependencies]
+tempfile = "3.27.0"
